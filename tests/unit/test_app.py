@@ -278,8 +278,26 @@ async def test_policy_copilot_503_until_ai_copilot_exists(client, monkeypatch):
     monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: None if n == "ai.copilot" else real(n, *a))
     assert (await client.post("/policy/copilot", json={})).status_code == 503  # master §7a
     monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: object() if n == "ai.copilot" else real(n, *a))
-    r = await client.post("/policy/copilot", json={})
-    assert r.status_code == 501 and r.json() == {"detail": "phase 2"}
+    assert (await client.post("/policy/copilot", json={})).status_code == 422  # bad body
+    import ai.copilot as copilot
+    from tripwire.contracts import Policy
+
+    async def unavailable(text, current):
+        raise copilot.CopilotUnavailable("no key")
+
+    monkeypatch.setattr(copilot, "draft_policy_with_meta", unavailable)
+    r = await client.post("/policy/copilot", json={"text": "block paste.example.org"})
+    assert r.status_code == 503 and r.json()["detail"].startswith("copilot model unavailable")
+
+    async def drafted(text, current):
+        return Policy(denylist=["paste.example.org"]), {"model": "m", "latency_ms": 1.0}
+
+    monkeypatch.setattr(copilot, "draft_policy_with_meta", drafted)
+    before = (await client.get("/policy")).json()
+    r = await client.post("/policy/copilot", json={"text": "block paste.example.org"})
+    assert r.status_code == 200 and r.headers["X-Copilot-Model"] == "m"
+    assert r.json()["denylist"] == ["paste.example.org"]
+    assert (await client.get("/policy")).json() == before  # preview only: nothing auto-applied
 
 
 async def test_auth_when_public(tmp_path):

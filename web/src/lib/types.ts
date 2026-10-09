@@ -207,3 +207,12 @@ export interface QuorumVote {
   verdict?: VerdictLabel | string;
   confidence?: number;
 }
+
+/** GET /guild/session/{id}/decision: the human's reply in a Guild approval session (read-back only). */
+export interface GuildDecision {
+  status: "waiting" | "approved" | "rejected";
+  operator_reply: string | null;
+  decided_by?: string | null;
+  source: string;
+  checked_ms: number;
+}
