@@ -199,6 +199,16 @@ The models above are a summary; the code in `tripwire/contracts.py` is the contr
 - ClickHouse: database `tripwire`, table `tripwire.events`; clients set the default database, so SQL can say `FROM events`. Env keys are `CLICKHOUSE_HOST/PORT/SECURE/DATABASE/USER/PASSWORD/RO_USER/RO_PASSWORD`. Shared clients in `tripwire/ch.py` (`client()`, `ro_client()`, `async_client()`).
 - Python layout: root-level packages (`checkpoint`, `agents`, `detection`, `ai`, `eval`) + the shared `tripwire` package; run everything from the repo root via `uv run` (pytest has `pythonpath=["."]`).
 
+### 7b. Change requests resolved at 10:50 (Bindu) — all additive, nothing renamed
+
+- `AlertPayload.agent_id: str = ""` added. **Set it on every `POST /alerts`** (required there; `?agent_id=` also accepted). `POST /block/{agent_id}` takes the agent from the path.
+- `tripwire.ch.async_client()` now returns a thread-backed async client (no aiohttp; deps stay frozen). Use `ch = await async_client()` then `await ch.query(...)` / `await ch.command(...)` / `await ch.insert(...)`; one client per task for parallel queries.
+- `tripwire.ch.ro_client()` now connects. The read-only user keeps `readonly=1` + `max_execution_time=5` but no `max_result_rows` (it broke the client's connect-time settings read). **Row caps are the investigator's job: sqlguard must inject `LIMIT 200`.** Re-run `make db` to update an existing local user.
+- Request bodies (already used by UI + checkpoint): `POST /config/hold {"enabled": bool}`, `POST /demo/replay {"scenario": "secret_theft", "agent_id"?: str}` → `{run_id, steps}`, `GET /demo/replay/{run_id}` → per-step outcomes. Until `fixtures/<scenario>.json` exists, `/demo/replay` returns 404.
+- SSE `data` shapes (envelope is `StreamEvent`): `snapshot` = `{status, incidents, recent_events (oldest first), alerts (newest first), hold_enabled, policy}`; `tool_event` = the event row with `ts_ms` (no hashes) + `incident_id`; config changes (hold toggle, `PUT /policy`) arrive as `metrics` with `data.source="checkpoint"`, `data.kind="hold"|"policy"`.
+- With `PUBLIC=1`, **every** POST/PUT needs header `X-Tripwire-Token` (agents, detector, replay included). Default is `PUBLIC=0`, checkpoint bound to `127.0.0.1`; set `CHECKPOINT_HOST=0.0.0.0` + `PUBLIC=1` to share it over the LAN.
+- `make dev` no longer dies when `detection/loop.py` is missing (the detector line idles until it's merged). `make lint` now fails on real lint errors.
+
 ## 8. Shared setup (frozen 9:45) — `.env.example` + `requirements.txt`
 
 Bindu commits both complete at 9:30 so nobody edits dependency files mid-event (that is the one file both would otherwise fight over).

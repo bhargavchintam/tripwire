@@ -30,8 +30,8 @@ down:  ## stop local services
 dev:  ## run checkpoint + detector + web via honcho (needs Procfile)
 	@[ -f Procfile ] && $(PY) honcho start || echo "Procfile not created yet (CP0)"
 
-lint:  ## ruff (no-op until code exists)
-	@$(PY) ruff check . 2>/dev/null || echo "ruff not set up / no python yet — skipping"
+lint:  ## ruff over the whole repo (fails the gate on any lint error)
+	$(PY) ruff check .
 
 test:  ## unit + integration tests (no-op until tests exist)
 	@if ls tests/unit/*.py tests/integration/*.py >/dev/null 2>&1; then \
@@ -46,10 +46,11 @@ e2e:  ## end-to-end acceptance (run after the 12:30 MVP)
 	else echo "no e2e tests yet — skipping"; fi
 
 seed:  ## load a few hundred historical rows for the live agents
-	@[ -f data/seed_live_agents.sql ] && echo "run seed via your CH client" || echo "data/seed_live_agents.sql not created yet"
+	$(PY) python -m tripwire.loader seed
 
-load:  ## load synthetic background rows (chunked toward 30M)
-	@[ -f data/background_data.sql ] && echo "run load via your CH client" || echo "data/background_data.sql not created yet"
+ROWS ?= 1000000
+load:  ## load synthetic background rows in 5M chunks (make load ROWS=30000000)
+	$(PY) python -m tripwire.loader load --rows $(ROWS) --chunk 5000000
 
 demo:  ## reset to green, ready to present
 	@echo "POST /demo/reset once the checkpoint is running"

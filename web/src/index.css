@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* Tripwire dark, high-contrast palette. Status colours always ship with an icon + text. */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-bg: #06080b;
+  --color-panel: #0d1117;
+  --color-panel-2: #131a23;
+  --color-line: #253041;
+  --color-fg: #eef2f7;
+  --color-muted: #94a3b8;
+  --color-dim: #64748b;
+
+  --color-ok: #22c55e;
+  --color-held: #f59e0b;
+  --color-bad: #ef4444;
+  --color-model: #a78bfa;
+  --color-info: #38bdf8;
+
+  --animate-quarantine: quarantine-pulse 1.6s ease-in-out infinite;
+  @keyframes quarantine-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.55); }
+    50% { box-shadow: 0 0 0 10px rgb(239 68 68 / 0); }
+  }
+}
+
+html, body, #root { height: 100%; }
+body {
+  @apply bg-bg text-fg font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+::selection { background: rgb(167 139 250 / 0.35); }
+
+/* Scrollbars that don't glare on a projector */
+* { scrollbar-width: thin; scrollbar-color: #2b3646 transparent; }
+
+.md h1, .md h2, .md h3 { @apply font-semibold text-fg mt-4 mb-2; }
+.md h3 { @apply text-base; }
+.md p { @apply text-sm leading-6 text-fg/90 my-2; }
+.md ul, .md ol { @apply text-sm list-disc pl-5 my-2; }
+.md code { @apply font-mono text-[12px] bg-panel-2 border border-line rounded px-1 py-0.5; }
+.md pre { @apply font-mono text-[12px] bg-panel-2 border border-line rounded-md p-3 overflow-x-auto; }
+.md table { @apply text-xs w-full border-collapse my-3; }
+.md th, .md td { @apply border border-line px-2 py-1 text-left; }
+.md th { @apply bg-panel-2; }
+.md blockquote { @apply border-l-2 border-held pl-3 text-muted text-sm; }
+.md strong { @apply text-fg; }

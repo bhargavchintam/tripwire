@@ -10,6 +10,7 @@ CLI:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -44,9 +45,47 @@ def ro_client():
     return client(readonly=True)
 
 
-async def async_client(readonly: bool = False, **settings):
-    """Async client (use one per task; clickhouse-connect async is a thread-pool wrapper)."""
-    return await clickhouse_connect.get_async_client(**_kwargs(readonly), settings=settings or None)
+class ThreadedAsyncClient:
+    """Async facade over the sync client. No aiohttp needed (deps are frozen).
+
+    clickhouse-connect's own async client requires aiohttp, which is not in the dep list,
+    so it raised ImportError (10:50 fix, CCR). Each awaited call runs in a worker thread;
+    a lock serializes calls because one sync client must not run concurrent queries.
+    For parallel queries, create one client per task.
+
+        ch = await async_client()
+        rows = (await ch.query("SELECT count() FROM events")).result_rows
+    """
+
+    def __init__(self, sync_client) -> None:
+        self._c = sync_client
+        self._lock = asyncio.Lock()
+
+    async def _run(self, fn, *args, **kwargs):
+        async with self._lock:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+
+    async def query(self, *args, **kwargs):
+        return await self._run(self._c.query, *args, **kwargs)
+
+    async def command(self, *args, **kwargs):
+        return await self._run(self._c.command, *args, **kwargs)
+
+    async def insert(self, *args, **kwargs):
+        return await self._run(self._c.insert, *args, **kwargs)
+
+    async def close(self) -> None:
+        await asyncio.to_thread(self._c.close)
+
+    @property
+    def sync(self):
+        """The underlying sync client (use from threads only)."""
+        return self._c
+
+
+async def async_client(readonly: bool = False, **settings) -> ThreadedAsyncClient:
+    """Async client: `await (await async_client()).query(...)`. One per task."""
+    return ThreadedAsyncClient(await asyncio.to_thread(client, readonly, **settings))
 
 
 def _split_sql(text: str) -> list[str]:

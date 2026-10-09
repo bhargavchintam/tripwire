@@ -147,6 +147,9 @@ ClassifyFn = Callable[[QuickCheckInput], Awaitable[Verdict]]
 
 
 class AlertPayload(BaseModel):
+    # Which agent the alert is about. Required for POST /alerts (non-blocking verdicts);
+    # POST /block/{agent_id} takes it from the path. Added 10:50 (CCR, additive).
+    agent_id: str = ""
     rule: str
     verdict: VerdictLabel
     confidence: float
