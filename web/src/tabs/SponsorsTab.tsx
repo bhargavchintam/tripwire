@@ -252,7 +252,6 @@ export function SponsorsTab() {
   const guildAgents = [...new Set([...Object.keys(state.modes), ...Object.keys(state.stats)])].filter((a) =>
     a.startsWith("guild:"),
   );
-  const lastCodeRef = state.events.find((x) => x.code_ref)?.code_ref;
   const lastGuild = guildAgents
     .map((g) => state.stats[g]?.last)
     .filter((x): x is ToolEvent => !!x)
@@ -432,20 +431,6 @@ export function SponsorsTab() {
                 </p>
                 <p className="mt-1.5 font-mono text-[12px] text-dim">receipt: semgrep/FINDINGS.md (final re-scan 15:45)</p>
               </div>
-              <Rows>
-                <Row
-                  label={
-                    <Tooltip content="Live: code_ref on the newest stream event that carries one">
-                      <span tabIndex={0} className="inline-flex cursor-help items-center gap-2 rounded-md">
-                        <span aria-hidden className={cn("size-1.5 rounded-full", live ? "bg-ok" : "bg-held")} />
-                        Last code_ref
-                      </span>
-                    </Tooltip>
-                  }
-                >
-                  {lastCodeRef ? <CopyId key={lastCodeRef} value={lastCodeRef} className="animate-pop-in text-[13px]" /> : <Dash />}
-                </Row>
-              </Rows>
             </Proof>
           }
         />
