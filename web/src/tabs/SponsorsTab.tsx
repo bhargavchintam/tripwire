@@ -85,7 +85,7 @@ export function SponsorsTab() {
       <Sponsor
         icon={<Brain className="text-model" />}
         name="Akash (AkashML)"
-        role="Model verdicts for held actions and detections run on AkashML (two-model quorum when available); cost per 1,000 events is compared with OpenAI."
+        role="Model verdicts for held actions and detections run on AkashML (meta-llama/Llama-3.3-70B-Instruct, chosen by measured latency). Cost per 1,000 events vs OpenAI appears on the Evidence tab once the eval run reports it."
         proof={
           state.modelIds.length ? (
             <>

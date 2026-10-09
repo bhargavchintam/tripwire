@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 
 import httpx
@@ -495,3 +496,14 @@ async def test_demo_reset_full_clears_samples_and_test_agents(client, svc):
     active = (await client.get("/status")).json()["active"]
     assert "deploy-bot" in active
     assert not any(a.startswith(("acc-", "verify:")) for a in active)
+
+
+async def test_demo_reset_full_drops_test_agent_incidents_keeps_fleet_history(client, svc):
+    now = int(time.time() * 1000)
+    blk = {"rule": "endpoint_check", "verdict": "malicious", "confidence": 0.9, "reason": "test",
+           "decision_source": "rule_only", "detected_at_ms": now, "last_step_ts_ms": now}
+    assert (await client.post("/block/e2e-sweep", json=blk)).status_code == 200
+    assert (await client.post("/block/deploy-bot", json={**blk, "rule": "secret_theft"})).status_code == 200
+    await client.post("/demo/reset?full=1")
+    agents = {i["agent_id"] for i in (await client.get("/incidents")).json()}
+    assert "e2e-sweep" not in agents and "deploy-bot" in agents

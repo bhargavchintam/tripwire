@@ -499,6 +499,9 @@ class Checkpoint:
                 st.watermarks.pop(a, None)
                 st.blocked.discard(a)
                 st.rings.pop(a, None)
+            # ...and their incidents (endpoint checks, acceptance runs). Fleet incidents stay as history.
+            for iid in [k for k, inc in st.incidents.items() if inc.agent_id.startswith(TEST_AGENT_PREFIXES)]:
+                del st.incidents[iid]
             self.emit("metrics", {"source": "checkpoint", "kind": "policy", "policy_version": st.policy.version})
         agents = sorted(set(st.last_ts) | set(st.modes) | st.blocked | set(st.watermarks))
         for a in agents:
