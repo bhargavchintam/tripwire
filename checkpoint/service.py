@@ -511,6 +511,12 @@ class Checkpoint:
         for inc in st.incidents.values():
             if inc.closed_ms is None:
                 inc.closed_ms = now
+        if full:
+            # A full reset starts a clean take: the console's feed, per-agent counts, attack chain and
+            # incident list are rebuilt from the snapshot, so drop the previous takes' events and incidents
+            # here (ClickHouse keeps the full event history; the audit chain is untouched).
+            st.incidents.clear()
+            st.recent_events.clear()
         st.recent_alerts.clear()
         st.rings.clear()
         st.mark_dirty()

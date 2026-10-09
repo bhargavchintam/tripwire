@@ -505,9 +505,23 @@ async def test_demo_reset_full_drops_test_agent_incidents_keeps_fleet_history(cl
     assert (await client.post("/block/e2e-sweep", json=blk)).status_code == 200
     assert (await client.post("/block/eval-bot", json=blk)).status_code == 200
     assert (await client.post("/block/deploy-bot", json={**blk, "rule": "secret_theft"})).status_code == 200
-    await client.post("/demo/reset?full=1")
+    await client.post("/demo/reset")  # plain reset: incidents are closed but kept
     agents = {i["agent_id"] for i in (await client.get("/incidents")).json()}
-    assert "e2e-sweep" not in agents and "eval-bot" not in agents and "deploy-bot" in agents
+    assert {"e2e-sweep", "eval-bot", "deploy-bot"} <= agents
+    await client.post("/demo/reset?full=1")  # full reset: every take starts clean (ClickHouse keeps history)
+    assert (await client.get("/incidents")).json() == []
+
+
+async def test_demo_reset_full_clears_the_live_feed_so_counts_start_at_zero(client, svc):
+    """Rehearsal 14:57: after many takes the agent cards showed 'Denied 95' and old events/incidents because
+    the snapshot still carried pre-reset recent_events and closed incidents."""
+    for _ in range(3):
+        await client.post("/tool", json={"agent_id": "deploy-bot", "action": "assume_role", "target": "arn:aws:iam::1:role/admin"})
+    assert len(svc.snapshot()["recent_events"]) == 3
+    await client.post("/demo/reset?full=1")
+    snap = svc.snapshot()
+    assert snap["recent_events"] == [] and snap["incidents"] == [] and snap["alerts"] == []
+    assert "deploy-bot" in (await client.get("/status")).json()["active"]  # the live fleet stays listed
 
 
 async def test_late_outbreak_for_a_closed_incident_changes_nothing(client, svc):
@@ -516,10 +530,13 @@ async def test_late_outbreak_for_a_closed_incident_changes_nothing(client, svc):
     now = int(time.time() * 1000)
     blk = {"rule": "hold", "verdict": "malicious", "confidence": 0.9, "reason": "t", "decision_source": "akashml",
            "detected_at_ms": now, "last_step_ts_ms": now}
-    inc = (await client.post("/block/deploy-bot", json=blk)).json()["incident_id"]
-    await client.post("/demo/reset?full=1")
     ob = {"source_id": "ticket:4821", "exposed_agents": ["support-bot"], "blocked_destinations": ["drop.example.net"]}
-    r = await client.post(f"/incidents/{inc}/outbreak", json=ob)
-    assert r.status_code == 409
+    inc = (await client.post("/block/deploy-bot", json=blk)).json()["incident_id"]
+    await client.post("/demo/reset")  # plain reset: the incident is closed -> 409
+    assert (await client.post(f"/incidents/{inc}/outbreak", json=ob)).status_code == 409
+    blk2 = {**blk, "last_step_ts_ms": now + 10_000, "detected_at_ms": now + 10_000}
+    inc2 = (await client.post("/block/deploy-bot", json=blk2)).json()["incident_id"]
+    await client.post("/demo/reset?full=1")  # full reset: the incident is gone -> 404
+    assert (await client.post(f"/incidents/{inc2}/outbreak", json=ob)).status_code == 404
     assert (await client.get("/policy")).json()["denylist"] == []
     assert (await client.get("/status")).json()["modes"].get("support-bot", "normal") == "normal"
