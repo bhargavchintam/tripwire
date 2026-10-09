@@ -12,9 +12,21 @@ Run from the repo root:
     uv run python -m detection.loop --once                           # one iteration, JSON summary; exit 1 on error
     uv run python -m detection.loop --rules secret_theft,baseline_novelty,role_grab,log_tamper
     uv run python -m detection.loop --interval 1.0 --threshold 0.8 --window-s 300 --checkpoint-url http://localhost:8000
+    uv run python -m detection.loop --no-outbreak --no-investigator     # containment only, no post-block hooks
+    uv run python -m detection.loop --quorum                            # two-model quorum (ai.quorum) when importable
 
-Honesty: decision_source is whatever classify() returned ('akashml' only when a model answered); every
-fallback decision made here is labelled rule_only and its reason starts with "model unavailable: ".
+Post-containment hooks (master §1 "Traces" + "Explains"): after a successful POST /block the detector schedules
+a background task that runs detection.outbreak.run_outbreak (10 s budget: patient zero, exposed agents ->
+heightened, attacker hosts -> fleet denylist) and then ai.investigator.investigate (30 s budget: the markdown
+report with SQL receipts). Incidents the checkpoint contained on its own (hold mode, honeytoken, policy) get the
+same hooks from the open-incident sweep. Hooks never block or crash the loop; they are counted in the summary
+and heartbeat (outbreaks, reports, hook_errors) and awaited on shutdown. The in-process run_once(client) and a
+bare Detector(ch, cp, classify) keep the hooks OFF (the CLI turns them on; pass outbreak=True / investigator=True).
+
+Honesty: decision_source is whatever classify() returned ('akashml' only when a model answered, 'quorum' only
+when ai.quorum had two models agree); every fallback decision made here is labelled rule_only and its reason
+starts with "model unavailable: ". Every AlertPayload (block and alert) carries the verdict's measured
+latency_ms / tokens_in / tokens_out, which the checkpoint copies into the incident Verdict.
 """
 
 from __future__ import annotations
@@ -59,6 +71,13 @@ SEEN_MAX = 5000
 PENDING_MAX = 1000
 RETRY_AFTER_S = 5.0  # re-send a decided verdict this long after a failed checkpoint POST (no re-classify)
 ERROR_LOG_EVERY_S = 30.0
+# Post-containment hooks (background tasks; they never block the loop): outbreak trace, then the investigator.
+OUTBREAK_TIMEOUT_S = 10.0
+INVESTIGATE_TIMEOUT_S = 30.0
+HOOK_DRAIN_S = 5.0  # shutdown: how long run_forever / the CLI wait for hooks still running
+RUN_ONCE_HOOK_DRAIN_S = 45.0  # module-level run_once(hooks=True) waits for the hooks it scheduled
+SWEEP_MAX_AGE_MS = 15 * 60_000  # checkpoint-contained incidents older than this are left alone
+HOOKED_MAX = 2000
 
 RuleFn = Callable[[QuickCheckInput], Verdict]
 
@@ -144,9 +163,18 @@ def resolve_rule_fallback() -> tuple[RuleFn, str]:
         return local_rule_verdict, "detection.loop.local_rule_verdict"
 
 
-def resolve_classify() -> tuple[ClassifyFn, str]:
+def resolve_classify(quorum: bool = False) -> tuple[ClassifyFn, str]:
     """ai.quick_check.classify when importable (AkashML-capable), else the rule fallback wrapped async.
-    Importing never calls a model; the returned label is logged at startup."""
+    With quorum=True, ai.quorum.classify_quorum (two AkashML model families must agree) is preferred and the
+    single classify is the fallback when it is not importable. Importing never calls a model; the returned
+    label is logged at startup."""
+    if quorum:
+        try:
+            from ai.quorum import classify_quorum  # type: ignore[import-not-found]
+
+            return classify_quorum, "ai.quorum.classify_quorum"
+        except Exception as exc:  # noqa: BLE001  (lane being built concurrently; any import error -> single model)
+            logger.warning(f"detector: --quorum requested but ai.quorum is not importable ({exc!r}); single classify")
     try:
         from ai.quick_check import classify  # type: ignore[import-not-found]
 
@@ -207,6 +235,7 @@ class CheckpointView:
     blocked: set[str] = field(default_factory=set)
     verdict_keys: set[str] = field(default_factory=set)
     watermarks: dict[str, int] = field(default_factory=dict)
+    open_incidents: list[dict[str, Any]] = field(default_factory=list)  # contracts.Incident dicts
 
 
 class CheckpointHTTP:
@@ -223,6 +252,7 @@ class CheckpointHTTP:
         """Pass `client` to reuse an existing httpx.AsyncClient (e.g. an in-process ASGITransport client
         from tests/e2e); it is then not closed by close(). Otherwise a client is built from base_url."""
         self.base_url = base_url.rstrip("/")
+        self.token = token
         self._headers = {"X-Tripwire-Token": token}
         self._owned = client is None
         self._client = client or httpx.AsyncClient(
@@ -236,6 +266,11 @@ class CheckpointHTTP:
     def from_client(cls, client: httpx.AsyncClient, token: str = "") -> "CheckpointHTTP":
         return cls(str(client.base_url) or "http://checkpoint", token, client=client)
 
+    @property
+    def http(self) -> httpx.AsyncClient:
+        """The underlying httpx client (the hooks hand it to detection.outbreak / ai.investigator)."""
+        return self._client
+
     async def status(self) -> CheckpointView:
         resp = await self._client.get("/status", headers=self._headers)
         resp.raise_for_status()
@@ -244,6 +279,7 @@ class CheckpointHTTP:
             blocked=set(data.get("blocked") or []),
             verdict_keys=set(data.get("verdict_keys") or []),
             watermarks={str(k): _int(v) for k, v in (data.get("watermarks") or {}).items()},
+            open_incidents=[i for i in (data.get("open_incidents") or []) if isinstance(i, dict)],
         )
 
     async def block(self, agent_id: str, payload: AlertPayload) -> httpx.Response:
@@ -302,17 +338,34 @@ class Detector:
         classify_timeout_s: float = CLASSIFY_TIMEOUT_S,
         seen_max: int = SEEN_MAX,
         retry_after_s: float = RETRY_AFTER_S,
+        outbreak: bool = False,
+        investigator: bool = False,
+        quorum: bool = False,
     ) -> None:
+        """outbreak / investigator: run the post-containment hooks (background tasks) after every block the
+        detector lands and for incidents the checkpoint contained itself. They default to OFF so an in-process
+        Detector built by a test (Bindu's e2e builds Detector(ch, cp, classify) directly and never drains the
+        hooks) cannot mutate the shared fleet policy between runs; `python -m detection.loop` turns both on
+        unless --no-outbreak / --no-investigator is given. quorum: use ai.quorum.classify_quorum when no
+        classify is injected (falls back to the single classify when ai.quorum is not importable)."""
         unknown = [r for r in rules if r not in SQL_FOR_RULE]
         if unknown:
             raise ValueError(f"unknown rules {unknown}; known: {sorted(SQL_FOR_RULE)}")
         self.ch = ch
         self.checkpoint = checkpoint
+        self.quorum = bool(quorum)
         if classify is None:
-            classify, self.classify_source = resolve_classify()
+            classify, self.classify_source = resolve_classify(quorum=self.quorum)
         else:
             self.classify_source = getattr(classify, "__qualname__", None) or type(classify).__name__
         self.classify: ClassifyFn = classify
+        self.outbreak_enabled = bool(outbreak)
+        self.investigator_enabled = bool(investigator)
+        # Hooks: tracked background tasks (awaited by drain_hooks), cumulative counters, incident ids already
+        # hooked in this process (LRU) so the open-incident sweep runs each incident's hooks once.
+        self._hook_tasks: set[asyncio.Task[Any]] = set()
+        self.hook_stats: dict[str, int] = {"scheduled": 0, "outbreaks": 0, "reports": 0, "hook_errors": 0}
+        self._hooked: OrderedDict[str, None] = OrderedDict()
         if fallback is None:
             fallback, self.fallback_source = resolve_rule_fallback()
         else:
@@ -429,6 +482,7 @@ class Detector:
 
         pending = self._pending.get(key)
         latency_ms: float | None = None
+        inp: QuickCheckInput | None = None
         if pending is not None:
             # Decided earlier; the checkpoint did not accept the POST. Re-send the same verdict after the
             # backoff -- no second recent_events query and no second classify call for the same hit.
@@ -449,6 +503,9 @@ class Detector:
             summary["classify_latency_ms"] = latency_ms
             summary["classify_source"] = verdict.decision_source
             summary["fallbacks"] += int(fell_back)
+            # Contract (AlertPayload, 11:55 CCR): carry the Verdict's measured cost into every /block and /alerts
+            # so the incident Verdict never shows 0 beside a real model id. A verdict without its own latency
+            # (rule_only, or a classify that did not time itself) gets the wall time measured here.
             payload = AlertPayload(
                 agent_id=agent,
                 rule=rule,
@@ -459,6 +516,9 @@ class Detector:
                 detected_at_ms=detected_at_ms,
                 last_step_ts_ms=last_step,
                 model_ids=list(verdict.model_ids),
+                latency_ms=float(verdict.latency_ms) if verdict.latency_ms > 0 else float(latency_ms),
+                tokens_in=max(0, _int(verdict.tokens_in)),
+                tokens_out=max(0, _int(verdict.tokens_out)),
             )
 
         blocking = payload.verdict == "malicious" and payload.confidence >= self.threshold
@@ -495,7 +555,143 @@ class Detector:
                 f"ttd_ms={detected_at_ms - last_step} classify_ms={latency_ms}"
                 f"{' (re-sent)' if pending is not None else ''}"
             )
+            if blocking and self.hooks_enabled:
+                incident_id = self._incident_id_of(resp)
+                if incident_id and self._schedule_hooks(
+                    agent, incident_id, inp, do_outbreak=self.outbreak_enabled, do_report=self.investigator_enabled
+                ):
+                    summary["hooks_scheduled"] += 1
+                elif not incident_id:
+                    logger.warning(f"detector: /block reply for {agent} carried no incident_id; hooks skipped")
         self._remember(key)
+
+    # ---- post-containment hooks ---------------------------------------------------
+    @property
+    def hooks_enabled(self) -> bool:
+        return self.outbreak_enabled or self.investigator_enabled
+
+    @staticmethod
+    def _incident_id_of(resp: httpx.Response) -> str:
+        try:
+            data = resp.json()
+        except ValueError:
+            return ""
+        return str(data.get("incident_id") or "") if isinstance(data, dict) else ""
+
+    def _mark_hooked(self, incident_id: str) -> None:
+        self._hooked[incident_id] = None
+        self._hooked.move_to_end(incident_id)
+        while len(self._hooked) > HOOKED_MAX:
+            self._hooked.popitem(last=False)
+
+    def _schedule_hooks(
+        self,
+        agent: str,
+        incident_id: str,
+        inp: QuickCheckInput | None,
+        *,
+        do_outbreak: bool,
+        do_report: bool,
+    ) -> bool:
+        """Start _after_block as a tracked background task. False when there is nothing to run."""
+        if not incident_id or not (do_outbreak or do_report):
+            return False
+        self._mark_hooked(incident_id)
+        task = asyncio.create_task(
+            self._after_block(agent, incident_id, inp, do_outbreak=do_outbreak, do_report=do_report),
+            name=f"tripwire-hooks-{incident_id}",
+        )
+        self._hook_tasks.add(task)
+        task.add_done_callback(self._hook_tasks.discard)
+        self.hook_stats["scheduled"] += 1
+        return True
+
+    async def _after_block(
+        self,
+        agent: str,
+        incident_id: str,
+        inp: QuickCheckInput | None,
+        *,
+        do_outbreak: bool = True,
+        do_report: bool = True,
+    ) -> None:
+        """The hooks, in order: (a) detection.outbreak.run_outbreak, 10 s; (b) ai.investigator.investigate, 30 s.
+        Both lazily imported, guarded and counted; a failure is logged (hook_errors) and never raised.
+        `inp` is the QuickCheckInput the verdict was made from (None for swept incidents); logged only."""
+        cp = self.checkpoint
+        n_events = len(inp.events) if inp is not None else None
+        logger.debug(f"detector: hooks for {incident_id} ({agent}, {n_events} events) outbreak={do_outbreak} report={do_report}")
+        if do_outbreak:
+            ob = None
+            try:
+                from detection.outbreak import run_outbreak
+
+                ob = await asyncio.wait_for(
+                    run_outbreak(incident_id, client=cp.http, ch=self.ch, token=cp.token), OUTBREAK_TIMEOUT_S
+                )
+            except Exception as exc:  # noqa: BLE001  (TimeoutError included)
+                logger.warning(f"detector: outbreak hook for {incident_id} failed: {type(exc).__name__}: {str(exc)[:160]}")
+            if ob is None:
+                self.hook_stats["hook_errors"] += 1
+            else:
+                self.hook_stats["outbreaks"] += 1
+                logger.info(
+                    f"detector: OUTBREAK {incident_id} ({agent}) source={ob.source_id!r} exposed={ob.exposed_agents} "
+                    f"denylist+={ob.blocked_destinations} query_ms={ob.query_ms}"
+                )
+        if do_report:
+            try:
+                from ai.investigator import investigate  # type: ignore[import-not-found]
+
+                report = await asyncio.wait_for(
+                    investigate(incident_id, client=cp.http, token=cp.token), INVESTIGATE_TIMEOUT_S
+                )
+            except Exception as exc:  # noqa: BLE001  (ImportError while the lane is being built, timeout, ...)
+                self.hook_stats["hook_errors"] += 1
+                logger.warning(f"detector: investigator hook for {incident_id} failed: {type(exc).__name__}: {str(exc)[:160]}")
+            else:
+                self.hook_stats["reports"] += 1
+                logger.info(
+                    f"detector: REPORT {incident_id} ({agent}) models={list(getattr(report, 'model_ids', []) or [])} "
+                    f"receipts={len(getattr(report, 'receipts', []) or [])}"
+                )
+
+    def _sweep_incidents(self, view: CheckpointView, summary: dict[str, Any]) -> None:
+        """Incidents the checkpoint contained on its own (hold mode, honeytoken, policy denylist) never pass
+        through POST /block here, so they would get no trace and no report. Schedule the same hooks for open,
+        contained, recent incidents that still lack them -- each incident once per detector process."""
+        now = now_ms()
+        for inc in view.open_incidents:
+            inc_id, agent = str(inc.get("id") or ""), str(inc.get("agent_id") or "")
+            if not inc_id or not agent or inc_id in self._hooked or inc.get("contained_ms") is None:
+                continue
+            if _int(inc.get("opened_ms")) < now - SWEEP_MAX_AGE_MS:
+                self._mark_hooked(inc_id)  # history (e.g. restored checkpoint state): leave it alone
+                continue
+            need_outbreak = self.outbreak_enabled and inc.get("outbreak") is None
+            need_report = self.investigator_enabled and not inc.get("report_md")
+            if not (need_outbreak or need_report):
+                self._mark_hooked(inc_id)
+                continue
+            if self._schedule_hooks(agent, inc_id, None, do_outbreak=need_outbreak, do_report=need_report):
+                summary["hooks_scheduled"] += 1
+                logger.info(
+                    f"detector: incident {inc_id} ({agent}, rule {inc.get('rule')}) was contained by the checkpoint; "
+                    f"running outbreak={need_outbreak} report={need_report}"
+                )
+
+    async def drain_hooks(self, timeout: float = HOOK_DRAIN_S) -> int:
+        """Await the running hook tasks for up to `timeout` s; stragglers are cancelled. Returns how many were."""
+        tasks = [t for t in self._hook_tasks if not t.done()]
+        if not tasks:
+            return 0
+        _, pending = await asyncio.wait(tasks, timeout=timeout)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+            logger.warning(f"detector: {len(pending)} hook task(s) still running after {timeout:g} s; cancelled")
+        return len(pending)
 
     # ---- one pass -----------------------------------------------------------------
     async def run_once(self) -> dict[str, Any]:
@@ -513,6 +709,7 @@ class Detector:
             "http_errors": 0,
             "retries": 0,
             "fallbacks": 0,
+            "hooks_scheduled": 0,
             "timings_ms": {},
             "classify_latency_ms": None,
             "classify_source": None,
@@ -556,6 +753,19 @@ class Detector:
                     summary["error"] = f"hit {rule}/{hit.get('agent_id')}: {type(exc).__name__}: {str(exc)[:160]}"
                     self._throttle.warn("hit", f"detector: {summary['error']}")
 
+        if self.hooks_enabled:
+            try:
+                self._sweep_incidents(view, summary)
+            except Exception as exc:  # noqa: BLE001  (a malformed incident dict must not stop the pass)
+                self._throttle.warn("sweep", f"detector: incident sweep failed: {exc!r}")
+        summary.update(
+            {
+                "outbreaks": self.hook_stats["outbreaks"],
+                "reports": self.hook_stats["reports"],
+                "hook_errors": self.hook_stats["hook_errors"],
+                "hooks_running": len([t for t in self._hook_tasks if not t.done()]),
+            }
+        )
         await self._heartbeat(summary)
         return summary
 
@@ -571,6 +781,12 @@ class Detector:
             "retries": summary["retries"],
             "pending": len(self._pending),
             "fallbacks": summary["fallbacks"],
+            "hooks_scheduled": summary["hooks_scheduled"],
+            "outbreaks": summary.get("outbreaks", self.hook_stats["outbreaks"]),
+            "reports": summary.get("reports", self.hook_stats["reports"]),
+            "hook_errors": summary.get("hook_errors", self.hook_stats["hook_errors"]),
+            "hooks_running": summary.get("hooks_running", 0),
+            "hooks": {"outbreak": self.outbreak_enabled, "investigator": self.investigator_enabled, "quorum": self.quorum},
             "classify_latency_ms": summary["classify_latency_ms"],
             "classify_source": summary["classify_source"],
             "classify_impl": self.classify_source,
@@ -599,7 +815,8 @@ class Detector:
         """run_once() on a monotonic schedule; logs and survives every error (never exits)."""
         logger.info(
             f"detector: running every {interval:.2f}s rules={list(self.rules)} threshold={self.threshold} "
-            f"window_s={self.window_s} classify={self.classify_source} fallback={self.fallback_source}"
+            f"window_s={self.window_s} classify={self.classify_source} fallback={self.fallback_source} "
+            f"hooks: outbreak={self.outbreak_enabled} investigator={self.investigator_enabled}"
         )
         next_tick = time.monotonic()
         while True:
@@ -633,6 +850,8 @@ async def run_once(
     threshold: float = 0.8,
     window_s: int = 300,
     token: str | None = None,
+    hooks: bool = False,
+    quorum: bool = False,
 ) -> dict[str, Any]:
     """One in-process detection pass that talks to the checkpoint ONLY through `client`.
 
@@ -640,12 +859,29 @@ async def run_once(
     client, so the detector never posts to the live :8000. ClickHouse is read through tripwire.ch
     (whatever .env / the Makefile's LOCAL_CH points at) unless a `ch` adapter is injected. Returns the
     same summary dict as Detector.run_once(); it never raises for service errors.
+
+    The post-containment hooks (outbreak trace + investigator report) are OFF by default so the acceptance
+    suite sees exactly one detection pass; hooks=True runs them and waits for them (<= 45 s) before returning
+    (summary["hooks_pending"] = how many were still running and got cancelled).
     """
     adapter = ch if ch is not None else ClickHouseAdapter()
     cp = CheckpointHTTP.from_client(client, token if token is not None else get_settings().tripwire_token)
-    detector = Detector(adapter, cp, classify, threshold=threshold, window_s=window_s, rules=rules)
+    detector = Detector(
+        adapter,
+        cp,
+        classify,
+        threshold=threshold,
+        window_s=window_s,
+        rules=rules,
+        outbreak=hooks,
+        investigator=hooks,
+        quorum=quorum,
+    )
     try:
-        return await detector.run_once()
+        summary = await detector.run_once()
+        if hooks:
+            summary["hooks_pending"] = await detector.drain_hooks(RUN_ONCE_HOOK_DRAIN_S)
+        return summary
     finally:
         if ch is None:
             await adapter.close()
@@ -655,34 +891,51 @@ def _log_startup(detector: Detector, checkpoint_url: str) -> None:
     s = get_settings()
     akash = "present" if s.akashml_api_key else "ABSENT"
     model_capable = detector.classify_source.startswith("ai.quick_check")
+    model_capable = model_capable or detector.classify_source.startswith("ai.quorum")
     logger.info(
         f"detector: classify={detector.classify_source} "
         f"({'akashml-capable' if model_capable else 'rule_only'}), AKASHML_API_KEY {akash}, "
-        f"fallback={detector.fallback_source}, checkpoint={checkpoint_url}"
+        f"fallback={detector.fallback_source}, checkpoint={checkpoint_url}, "
+        f"hooks: outbreak={detector.outbreak_enabled} investigator={detector.investigator_enabled}"
     )
     if model_capable and not s.akashml_api_key:
         logger.info("detector: no AkashML key -> verdicts will be labelled rule_only until one is set")
 
 
 async def _amain(
-    interval: float, once: bool, rules: tuple[str, ...], threshold: float, window_s: int, checkpoint_url: str
+    interval: float,
+    once: bool,
+    rules: tuple[str, ...],
+    threshold: float,
+    window_s: int,
+    checkpoint_url: str,
+    outbreak: bool = True,
+    investigator: bool = True,
+    quorum: bool = False,
 ) -> int:
     """0 on success; with --once, 1 when the pass reported an error (ClickHouse or checkpoint unreachable)."""
     s = get_settings()
     ch = ClickHouseAdapter()
     cp = CheckpointHTTP(checkpoint_url, s.tripwire_token)
-    detector = Detector(ch, cp, threshold=threshold, window_s=window_s, rules=rules)
+    detector = Detector(
+        ch, cp, threshold=threshold, window_s=window_s, rules=rules, outbreak=outbreak, investigator=investigator, quorum=quorum
+    )
     _log_startup(detector, checkpoint_url)
     try:
         if once:
             summary = await detector.run_once()
+            if summary["hooks_scheduled"]:
+                summary["hooks_pending"] = await detector.drain_hooks(RUN_ONCE_HOOK_DRAIN_S)
             typer.echo(json.dumps(summary, default=str, indent=2))
             return 1 if summary.get("error") else 0
         await detector.run_forever(interval)
         return 0
     finally:
-        await cp.close()
-        await ch.close()
+        try:
+            await detector.drain_hooks(HOOK_DRAIN_S)
+        finally:
+            await cp.close()
+            await ch.close()
 
 
 @app.command()
@@ -697,6 +950,15 @@ def main(
     threshold: float = typer.Option(0.8, "--threshold", help="block when malicious and confidence >= threshold (0..1)"),
     window_s: int = typer.Option(300, "--window-s", help="lookback window in seconds (> 0)"),
     checkpoint_url: Optional[str] = typer.Option(None, "--checkpoint-url", help="default: CHECKPOINT_URL from .env"),
+    outbreak: bool = typer.Option(
+        True, "--outbreak/--no-outbreak", help="after a block: trace the outbreak (detection.outbreak) and post it"
+    ),
+    investigator: bool = typer.Option(
+        True, "--investigator/--no-investigator", help="after a block: write the incident report (ai.investigator)"
+    ),
+    quorum: bool = typer.Option(
+        False, "--quorum", help="classify with the two-model quorum (ai.quorum); single model when not importable"
+    ),
 ) -> None:
     """Run the Tripwire detector against ClickHouse and the checkpoint. Exit 2 on bad arguments."""
     rule_list = tuple(r.strip() for r in rules.split(",") if r.strip())
@@ -712,7 +974,19 @@ def main(
         raise typer.Exit(2)
     url = checkpoint_url or get_settings().checkpoint_url
     try:
-        code = asyncio.run(_amain(interval, once, rule_list, threshold, window_s, url))
+        code = asyncio.run(
+            _amain(
+                interval,
+                once,
+                rule_list,
+                threshold,
+                window_s,
+                url,
+                outbreak=outbreak,
+                investigator=investigator,
+                quorum=quorum,
+            )
+        )
     except KeyboardInterrupt:
         logger.info("detector: stopped")
         code = 0

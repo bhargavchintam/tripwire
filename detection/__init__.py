@@ -3,4 +3,5 @@
 detection/sql/*.sql   -- the queries (loaded at runtime by detection.sql_loader)
 detection/loop.py     -- `uv run python -m detection.loop` : query -> classify -> /block | /alerts -> /heartbeat
 detection/metrics.py  -- Timer, RollingSamples (p50/p95), make_heartbeat
+detection/outbreak.py -- `uv run python -m detection.outbreak <incident_id>` : trace patient zero -> POST outbreak
 """

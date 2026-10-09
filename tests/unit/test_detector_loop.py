@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import sys
 import time
+import types
 from typing import Any
 
 import httpx
@@ -109,6 +111,8 @@ class FakeCheckpoint:
         block_status: int = 200,
         alert_status: int = 200,
         down: bool = False,
+        open_incidents: list[dict[str, Any]] | None = None,
+        incident_id: str | None = "inc-test",
     ) -> None:
         self.blocked = list(blocked or [])
         self.verdict_keys = list(verdict_keys or [])
@@ -116,6 +120,8 @@ class FakeCheckpoint:
         self.block_status = block_status
         self.alert_status = alert_status
         self.down = down
+        self.open_incidents = list(open_incidents or [])
+        self.incident_id = incident_id  # None: the /block reply carries no incident_id
         self.requests: list[tuple[str, str, Any, dict[str, str]]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -130,7 +136,7 @@ class FakeCheckpoint:
                 json={
                     "active": [AGENT, OTHER],
                     "blocked": self.blocked,
-                    "open_incidents": [],
+                    "open_incidents": self.open_incidents,
                     "watermarks": self.watermarks,
                     "modes": {},
                     "verdict_keys": self.verdict_keys,
@@ -141,7 +147,10 @@ class FakeCheckpoint:
         if request.method == "POST" and path.startswith("/block/"):
             if self.block_status == 409:
                 return httpx.Response(409, json={"detail": "duplicate alert", "reason": "duplicate"})
-            return httpx.Response(self.block_status, json={"status": "blocked", "incident_id": "inc-test"})
+            reply = {"status": "blocked"}
+            if self.incident_id:
+                reply["incident_id"] = self.incident_id
+            return httpx.Response(self.block_status, json=reply)
         if request.method == "POST" and path == "/alerts":
             return httpx.Response(self.alert_status, json={"status": "recorded", "key": "k"})
         if request.method == "POST" and path == "/heartbeat":
@@ -176,6 +185,9 @@ async def rule_classify(inp: QuickCheckInput) -> Verdict:
 
 
 def make(ch: FakeCH, cp: FakeCheckpoint, classify, **kw) -> Detector:
+    """A Detector with the post-block hooks OFF unless the test opts in (outbreak=True / investigator=True)."""
+    kw.setdefault("outbreak", False)
+    kw.setdefault("investigator", False)
     return Detector(ch, cp.client(), classify, fallback=local_rule_verdict, **kw)
 
 
@@ -599,3 +611,276 @@ async def test_module_run_once_uses_given_client_and_blocks() -> None:
     params = inspect.signature(loop_mod.run_once).parameters
     assert "client" in params
     assert [p.name for p in params.values() if p.default is inspect.Parameter.empty] == ["client"]
+
+
+# ---------------------------------------------------------------------------
+# AlertPayload cost fields (11:55 CCR): latency_ms / tokens_in / tokens_out come from the Verdict
+# ---------------------------------------------------------------------------
+
+
+async def test_block_and_alert_payloads_carry_the_verdict_cost_fields():
+    cp = FakeCheckpoint()
+    summary = await make(attack_ch(), cp, scripted(MALICIOUS)).run_once()
+    (block,) = cp.posts("/block/")
+    assert (block["latency_ms"], block["tokens_in"], block["tokens_out"]) == (120.0, 300, 20)
+    assert summary["classify_latency_ms"] is not None
+    priced = BENIGN.model_copy(update={"latency_ms": 80.5, "tokens_in": 210, "tokens_out": 12})
+    cp2 = FakeCheckpoint()
+    await make(attack_ch(), cp2, scripted(priced)).run_once()
+    (alert,) = cp2.posts("/alerts")
+    assert (alert["latency_ms"], alert["tokens_in"], alert["tokens_out"]) == (80.5, 210, 12)
+    # the whole payload still validates as the frozen contract model
+    from tripwire.contracts import AlertPayload
+
+    assert AlertPayload.model_validate(block).tokens_in == 300 and AlertPayload.model_validate(alert).latency_ms == 80.5
+
+
+async def test_payload_latency_is_the_measured_wall_time_when_the_verdict_has_none():
+    cp = FakeCheckpoint()
+    summary = await make(attack_ch(), cp, scripted(BENIGN)).run_once()  # BENIGN carries latency_ms 0
+    (alert,) = cp.posts("/alerts")
+    assert alert["latency_ms"] == summary["classify_latency_ms"] >= 0 and alert["tokens_in"] == alert["tokens_out"] == 0
+    cp2 = FakeCheckpoint()
+    summary2 = await make(attack_ch(), cp2, scripted(RuntimeError("model API 500"))).run_once()
+    (block,) = cp2.posts("/block/")  # rule_only fallback: measured latency of the failed call, no tokens
+    assert block["decision_source"] == "rule_only" and block["latency_ms"] == summary2["classify_latency_ms"]
+    assert block["tokens_in"] == 0 and block["tokens_out"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Post-containment hooks: outbreak trace + investigator report after a successful /block
+# ---------------------------------------------------------------------------
+
+
+def install_fake_hooks(monkeypatch, *, outbreak: Any = "ok", investigate: Any = "ok") -> dict[str, list[Any]]:
+    """Replace the lazily imported hook targets (detection.outbreak.run_outbreak, ai.investigator.investigate)
+    with recording fakes. A value that is an Exception is raised; a coroutine function is awaited for its value."""
+    from tripwire.contracts import Outbreak, ReportPayload
+
+    calls: dict[str, list[Any]] = {"outbreak": [], "investigate": [], "order": []}
+
+    async def fake_run_outbreak(incident_id: str, *, client: Any, ch: Any = None, token: Any = None, **kw: Any):
+        calls["outbreak"].append((incident_id, client, ch, token))
+        calls["order"].append("outbreak")
+        if isinstance(outbreak, Exception):
+            raise outbreak
+        if callable(outbreak):
+            return await outbreak()
+        if outbreak is None:
+            return None
+        return Outbreak(source_id="ticket:4821", exposed_agents=[OTHER], blocked_destinations=["drop.example.net"], query_ms=3.5)
+
+    async def fake_investigate(incident_id: str, *, client: Any = None, token: Any = None, **kw: Any):
+        calls["investigate"].append((incident_id, client, token))
+        calls["order"].append("investigate")
+        if isinstance(investigate, Exception):
+            raise investigate
+        if callable(investigate):
+            return await investigate()
+        return ReportPayload(report_md="# report", receipts=[{"sql": "x", "ms": 1.0, "rows_read": 1}], model_ids=["m"])
+
+    import detection.outbreak as ob_mod
+
+    monkeypatch.setattr(ob_mod, "run_outbreak", fake_run_outbreak)
+    fake_mod = types.ModuleType("ai.investigator")
+    fake_mod.investigate = fake_investigate  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ai.investigator", fake_mod)
+    return calls
+
+
+async def test_hooks_are_scheduled_after_a_200_from_block_and_awaited_by_drain(monkeypatch):
+    calls = install_fake_hooks(monkeypatch)
+    ch, cp = attack_ch(), FakeCheckpoint()
+    d = make(ch, cp, scripted(MALICIOUS), outbreak=True, investigator=True)
+    summary = await d.run_once()
+    assert summary["blocks"] == 1 and summary["hooks_scheduled"] == 1 and d.hook_stats["scheduled"] == 1
+    assert await d.drain_hooks(5.0) == 0  # nothing cancelled
+    assert calls["order"] == ["outbreak", "investigate"]  # outbreak first, then the report
+    assert calls["outbreak"] == [("inc-test", d.checkpoint.http, ch, "test-token")]
+    assert calls["investigate"] == [("inc-test", d.checkpoint.http, "test-token")]
+    assert d.hook_stats == {"scheduled": 1, "outbreaks": 1, "reports": 1, "hook_errors": 0}
+    # counters reach the summary and the heartbeat of the next pass
+    second = await d.run_once()
+    assert (second["outbreaks"], second["reports"], second["hook_errors"], second["hooks_running"]) == (1, 1, 0, 0)
+    hb = cp.posts("/heartbeat")[-1]["metrics"]
+    assert (hb["outbreaks"], hb["reports"], hb["hook_errors"], hb["hooks_scheduled"]) == (1, 1, 0, 0)
+    assert hb["hooks"] == {"outbreak": True, "investigator": True, "quorum": False}
+
+
+async def test_hooks_not_scheduled_on_409_alerts_or_a_reply_without_incident_id(monkeypatch):
+    calls = install_fake_hooks(monkeypatch)
+    d = make(attack_ch(), FakeCheckpoint(block_status=409), scripted(MALICIOUS), outbreak=True, investigator=True)
+    summary = await d.run_once()
+    assert summary["conflicts"] == 1 and summary["hooks_scheduled"] == 0 and not d._hook_tasks
+    # a non-blocking verdict never triggers the hooks
+    d2 = make(attack_ch(), FakeCheckpoint(), scripted(BENIGN), outbreak=True, investigator=True)
+    assert (await d2.run_once())["hooks_scheduled"] == 0
+    # a 200 whose body carries no incident_id: nothing to trace, logged and skipped
+    d3 = make(attack_ch(), FakeCheckpoint(incident_id=None), scripted(MALICIOUS), outbreak=True, investigator=True)
+    s3 = await d3.run_once()
+    assert s3["blocks"] == 1 and s3["hooks_scheduled"] == 0
+    await asyncio.sleep(0)
+    assert calls["outbreak"] == [] and calls["investigate"] == []
+
+
+async def test_flags_select_which_hooks_run(monkeypatch):
+    calls = install_fake_hooks(monkeypatch)
+    d = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS), outbreak=True, investigator=False)
+    await d.run_once()
+    await d.drain_hooks(5.0)
+    assert len(calls["outbreak"]) == 1 and calls["investigate"] == []
+    d2 = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS), outbreak=False, investigator=True)
+    await d2.run_once()
+    await d2.drain_hooks(5.0)
+    assert len(calls["outbreak"]) == 1 and len(calls["investigate"]) == 1
+    d3 = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS))  # both off: nothing scheduled, not even tasks
+    s3 = await d3.run_once()
+    assert s3["blocks"] == 1 and s3["hooks_scheduled"] == 0 and not d3.hooks_enabled and not d3._hook_tasks
+
+
+async def test_hook_failures_are_counted_never_raised(monkeypatch):
+    calls = install_fake_hooks(monkeypatch, outbreak=RuntimeError("CH down"), investigate=TimeoutError("model slow"))
+    cp = FakeCheckpoint()
+    d = make(attack_ch(), cp, scripted(MALICIOUS), outbreak=True, investigator=True)
+    summary = await d.run_once()
+    assert summary["blocks"] == 1 and summary["error"] is None
+    assert await d.drain_hooks(5.0) == 0
+    assert len(calls["outbreak"]) == 1 and len(calls["investigate"]) == 1  # the report still ran after the failed trace
+    assert d.hook_stats == {"scheduled": 1, "outbreaks": 0, "reports": 0, "hook_errors": 2}
+    second = await d.run_once()
+    assert second["hook_errors"] == 2 and cp.posts("/heartbeat")[-1]["metrics"]["hook_errors"] == 2
+    # run_outbreak answering None (it never raises) is a failed trace too
+    calls2 = install_fake_hooks(monkeypatch, outbreak=None)
+    d2 = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS), outbreak=True, investigator=True)
+    await d2.run_once()
+    await d2.drain_hooks(5.0)
+    assert d2.hook_stats == {"scheduled": 1, "outbreaks": 0, "reports": 1, "hook_errors": 1} and len(calls2["investigate"]) == 1
+
+
+async def test_hook_timeouts_are_bounded_and_drain_cancels_stragglers(monkeypatch):
+    async def slow():
+        await asyncio.sleep(5)
+
+    install_fake_hooks(monkeypatch, outbreak=slow, investigate="ok")
+    monkeypatch.setattr(L, "OUTBREAK_TIMEOUT_S", 0.05)
+    d = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS), outbreak=True, investigator=True)
+    await d.run_once()
+    t0 = time.perf_counter()
+    assert await d.drain_hooks(5.0) == 0
+    assert time.perf_counter() - t0 < 1.0  # the 5 s trace was cut at 50 ms
+    assert d.hook_stats == {"scheduled": 1, "outbreaks": 0, "reports": 1, "hook_errors": 1}
+    # a hook still running at shutdown is cancelled by drain_hooks and reported
+    install_fake_hooks(monkeypatch, outbreak="ok", investigate=slow)
+    d2 = make(attack_ch(), FakeCheckpoint(), scripted(MALICIOUS), outbreak=True, investigator=True)
+    await d2.run_once()
+    (task,) = list(d2._hook_tasks)
+    assert await d2.drain_hooks(0.05) == 1
+    assert task.cancelled() or task.done()
+    assert not [t for t in d2._hook_tasks if not t.done()]
+
+
+async def test_sweep_runs_hooks_once_for_incidents_the_checkpoint_contained_itself(monkeypatch):
+    calls = install_fake_hooks(monkeypatch)
+    now = L.now_ms()
+    hold_inc = {"id": "inc-hold", "agent_id": OTHER, "rule": "hold", "opened_ms": now - 1000, "contained_ms": now - 900,
+                "outbreak": None, "report_md": None, "steps": []}
+    uncontained = {"id": "inc-open", "agent_id": OTHER, "rule": "hold", "opened_ms": now, "contained_ms": None}
+    old = {"id": "inc-old", "agent_id": AGENT, "rule": "honeytoken", "opened_ms": now - 60 * 60_000, "contained_ms": now - 60 * 60_000}
+    done = {"id": "inc-done", "agent_id": AGENT, "rule": "hold", "opened_ms": now, "contained_ms": now,
+            "outbreak": {"source_id": "t", "exposed_agents": [], "blocked_destinations": [], "query_ms": 1.0}, "report_md": "# r"}
+    cp = FakeCheckpoint(open_incidents=[hold_inc, uncontained, old, done])
+    d = make(FakeCH({"funnel": []}), cp, scripted(MALICIOUS), outbreak=True, investigator=True)
+    first = await d.run_once()
+    assert first["hooks_scheduled"] == 1
+    await d.drain_hooks(5.0)
+    assert [c[0] for c in calls["outbreak"]] == ["inc-hold"] and [c[0] for c in calls["investigate"]] == ["inc-hold"]
+    second = await d.run_once()  # the same open incident is not hooked twice by this process
+    assert second["hooks_scheduled"] == 0 and len(calls["outbreak"]) == 1
+    # only the missing half is run: an incident with its outbreak but no report gets just the investigator
+    half = {"id": "inc-half", "agent_id": AGENT, "rule": "hold", "opened_ms": now, "contained_ms": now,
+            "outbreak": {"source_id": "t", "exposed_agents": [], "blocked_destinations": [], "query_ms": 1.0}, "report_md": None}
+    cp.open_incidents.append(half)
+    third = await d.run_once()
+    await d.drain_hooks(5.0)
+    assert third["hooks_scheduled"] == 1 and len(calls["outbreak"]) == 1 and [c[0] for c in calls["investigate"]][-1] == "inc-half"
+    # with the hooks off the sweep never runs
+    d_off = make(FakeCH({"funnel": []}), FakeCheckpoint(open_incidents=[hold_inc]), scripted(MALICIOUS))
+    assert (await d_off.run_once())["hooks_scheduled"] == 0
+
+
+async def test_module_run_once_keeps_hooks_off_unless_asked(monkeypatch):
+    calls = install_fake_hooks(monkeypatch)
+    fcp = FakeCheckpoint()
+
+    async def malicious(inp: QuickCheckInput) -> Verdict:
+        return MALICIOUS
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fcp.handler), base_url="http://checkpoint.test") as c:
+        summary = await L.run_once(c, ch=attack_ch(), classify=malicious, token="tok")
+        assert summary["blocks"] == 1 and summary["hooks_scheduled"] == 0 and "hooks_pending" not in summary
+        await asyncio.sleep(0.01)
+        assert calls["outbreak"] == [] and calls["investigate"] == []
+        fcp2 = FakeCheckpoint()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fcp2.handler), base_url="http://checkpoint.test") as c2:
+        summary2 = await L.run_once(c2, ch=attack_ch(), classify=malicious, token="tok", hooks=True)
+        assert summary2["blocks"] == 1 and summary2["hooks_scheduled"] == 1 and summary2["hooks_pending"] == 0
+        assert [x[0] for x in calls["outbreak"]] == ["inc-test"] and calls["outbreak"][0][1] is c2
+        assert [x[0] for x in calls["investigate"]] == ["inc-test"]
+        assert (await c2.get("/status")).status_code == 200  # the caller's client is still open
+
+
+# ---------------------------------------------------------------------------
+# --quorum wiring: ai.quorum.classify_quorum when importable, single classify otherwise
+# ---------------------------------------------------------------------------
+
+
+def test_quorum_flag_falls_back_to_single_classify_when_ai_quorum_is_missing(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ai.quorum", None)  # `from ai.quorum import ...` -> ImportError
+    classify, label = L.resolve_classify(quorum=True)
+    assert callable(classify) and not label.startswith("ai.quorum")
+    d = Detector(FakeCH(), FakeCheckpoint().client(), None, quorum=True, outbreak=False, investigator=False)
+    assert d.quorum is True and d.classify is not None and not d.classify_source.startswith("ai.quorum")
+    assert d.classify_source == label
+
+
+def test_quorum_flag_picks_ai_quorum_when_importable(monkeypatch):
+    async def classify_quorum(inp: QuickCheckInput) -> Verdict:
+        return MALICIOUS.model_copy(update={"decision_source": "quorum", "model_ids": ["a", "b"]})
+
+    fake = types.ModuleType("ai.quorum")
+    fake.classify_quorum = classify_quorum  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ai.quorum", fake)
+    classify, label = L.resolve_classify(quorum=True)
+    assert classify is classify_quorum and label == "ai.quorum.classify_quorum"
+    d = Detector(FakeCH(), FakeCheckpoint().client(), None, quorum=True, outbreak=False, investigator=False)
+    assert d.classify is classify_quorum and d.classify_source == "ai.quorum.classify_quorum"
+    # without the flag the quorum is never picked, even when importable
+    single, single_label = L.resolve_classify(quorum=False)
+    assert single is not classify_quorum and not single_label.startswith("ai.quorum")
+    assert Detector(FakeCH(), FakeCheckpoint().client(), None, outbreak=False, investigator=False).quorum is False
+
+
+async def test_quorum_verdict_is_sent_as_quorum_with_both_model_ids(monkeypatch):
+    quorum_v = MALICIOUS.model_copy(update={"decision_source": "quorum", "model_ids": ["akash/small", "akash/large"], "latency_ms": 2100.0})
+    cp = FakeCheckpoint()
+    d = make(attack_ch(), cp, scripted(quorum_v), quorum=True)
+    summary = await d.run_once()
+    assert summary["blocks"] == 1 and summary["classify_source"] == "quorum"
+    (block,) = cp.posts("/block/")
+    assert block["decision_source"] == "quorum" and block["model_ids"] == ["akash/small", "akash/large"]
+    assert block["latency_ms"] == 2100.0
+    assert cp.posts("/heartbeat")[-1]["metrics"]["hooks"]["quorum"] is True
+
+
+def test_cli_accepts_the_hook_and_quorum_flags():
+    runner = CliRunner()
+    help_out = runner.invoke(L.app, ["--help"]).output
+    for flag in ("--no-outbreak", "--no-investigator", "--quorum"):
+        assert flag in help_out, flag
+    res = runner.invoke(
+        L.app, ["--once", "--no-outbreak", "--no-investigator", "--quorum", "--checkpoint-url", "http://127.0.0.1:18999"]
+    )
+    assert res.exit_code == 1, res.output  # flags accepted; the throwaway port is unreachable -> error reported
+    out = res.stdout
+    summary = json.loads(out[out.index("{") :])
+    assert summary["error"].startswith("checkpoint /status") and summary["hooks_scheduled"] == 0
