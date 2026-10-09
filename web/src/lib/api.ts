@@ -7,6 +7,7 @@ import type {
   FleetHeatmap,
   FleetTopRow,
   GuardrailProof,
+  GuildDecision,
   Incident,
   Policy,
 } from "./types";
@@ -101,6 +102,8 @@ export const api = {
     }
     return { status: res.status, body: text };
   },
+  /** Read-back of the human's decision in a Guild approval session (never approves anything itself). */
+  guildDecision: (sessionId: string) => getJSON<GuildDecision>(`/guild/session/${enc(sessionId)}/decision`),
   replay: (scenario = "secret_theft") => postJSON<Record<string, unknown>>("/demo/replay", { scenario }),
   // full=1: also restore the default policy + clear proofs so every demo take starts clean.
   reset: () => postJSON<Record<string, unknown>>("/demo/reset?full=1"),

@@ -1,7 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
+  ArrowRight,
   Ban,
+  CircleOff,
   ExternalLink,
   FlaskConical,
   LoaderCircle,
@@ -20,7 +22,7 @@ import { Chip, EASE_OUT, SPRING_SOFT, toneText, type Tone } from "./fx";
 import { api, ApiError } from "../lib/api";
 import { DASH, fmtClock, fmtMs } from "../lib/format";
 import { cn } from "../lib/utils";
-import type { GuardrailGate, GuardrailProof } from "../lib/types";
+import type { GuardrailGate, GuardrailProof, GuildDecision } from "../lib/types";
 import { useTripwire } from "../hooks/useTripwire";
 
 const GATE_LABEL: Record<string, string> = {
@@ -136,6 +138,178 @@ function HostChips({ items, tone, icon }: { items: string[]; tone: "ok" | "bad";
   );
 }
 
+/** Guild read-back cadence and give-up horizon. */
+const GUILD_POLL_MS = 3000;
+const GUILD_POLL_MAX_MS = 15 * 60 * 1000;
+
+/** Session id = last path segment of the Guild session URL (query/hash ignored). */
+function guildSessionId(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const seg = new URL(url, window.location.href).pathname.split("/").filter(Boolean).pop();
+    return seg ? decodeURIComponent(seg) : null;
+  } catch {
+    return null;
+  }
+}
+
+type GuildPoll =
+  | { phase: "idle" }
+  | { phase: "polling"; decision: GuildDecision | null; lastError?: string }
+  | { phase: "decided"; decision: GuildDecision }
+  | { phase: "unavailable"; detail: string }
+  | { phase: "stopped"; decision: GuildDecision | null; why: string };
+
+/**
+ * Polls GET /guild/session/{id}/decision every 3 s while a human has not answered yet.
+ * Read-back only: it never approves anything. Stops on approved/rejected, unmount, 15 min, or 503.
+ */
+function useGuildDecision(sessionId: string | null): GuildPoll {
+  const [poll, setPoll] = useState<GuildPoll>({ phase: "idle" });
+  useEffect(() => {
+    if (!sessionId) {
+      setPoll({ phase: "idle" });
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    let last: GuildDecision | null = null;
+    setPoll({ phase: "polling", decision: null });
+
+    async function tick() {
+      if (cancelled) return;
+      if (Date.now() - started >= GUILD_POLL_MAX_MS) {
+        setPoll({ phase: "stopped", decision: last, why: "Stopped checking Guild after 15 min" });
+        return;
+      }
+      try {
+        const d = await api.guildDecision(sessionId as string);
+        if (cancelled) return;
+        last = d;
+        if (d.status === "approved" || d.status === "rejected") {
+          setPoll({ phase: "decided", decision: d });
+          return;
+        }
+        setPoll({ phase: "polling", decision: d });
+      } catch (e) {
+        if (cancelled) return;
+        const status = e instanceof ApiError ? e.status : 0;
+        const msg = (e as Error).message;
+        if (status === 503) {
+          setPoll({ phase: "unavailable", detail: msg });
+          return;
+        }
+        if (status >= 400 && status < 500 && status !== 429) {
+          setPoll({ phase: "stopped", decision: last, why: `Guild read-back refused: ${msg}` });
+          return;
+        }
+        // transient (network / 5xx): keep the last real answer, say what failed, try again
+        setPoll({ phase: "polling", decision: last, lastError: msg });
+      }
+      timer = setTimeout(tick, GUILD_POLL_MS);
+    }
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [sessionId]);
+  return poll;
+}
+
+/** Status row for the human decision read back from Guild (held = waiting, ok = approved, bad = rejected). */
+function GuildDecisionRow({ poll, applied }: { poll: GuildPoll; applied: boolean }) {
+  if (poll.phase === "idle") return null;
+  if (poll.phase === "unavailable") {
+    return (
+      <Tooltip content={poll.detail}>
+        <span tabIndex={0} className="inline-flex w-fit animate-pop-in outline-none">
+          <Chip tone="neutral" icon={<CircleOff />}>
+            Guild read-back unavailable (503)
+          </Chip>
+        </span>
+      </Tooltip>
+    );
+  }
+  const d = poll.decision;
+  const checked = d ? (
+    <Tooltip content={`Last checked (checkpoint clock) · source: ${d.source}`}>
+      <span tabIndex={0} className="ml-auto shrink-0 font-mono text-xs font-normal tabular-nums text-dim outline-none">
+        checked {fmtClock(d.checked_ms, false)}
+      </span>
+    </Tooltip>
+  ) : null;
+  const by = d?.decided_by ? <span className="font-normal text-muted"> · by {d.decided_by}</span> : null;
+
+  if (poll.phase === "decided" && poll.decision.status === "approved") {
+    const dd = poll.decision;
+    return (
+      <div role="status" className="flex flex-col gap-1.5 animate-pop-in">
+        <div className="tint-ok flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-2.5 text-sm font-medium">
+          <DrawnMark kind="pass" delay={0} className="size-5" />
+          <span className="min-w-0">
+            Approved in Guild by a human — reply:{" "}
+            <span className="font-mono">{dd.operator_reply?.trim() || DASH}</span>
+            {by}
+          </span>
+          {checked}
+        </div>
+        {!applied && (
+          <div className="flex items-center gap-1.5 pl-1 text-[13px] text-ok">
+            <ArrowRight className="size-3.5" strokeWidth={1.75} aria-hidden />
+            Apply the approved cure in Tripwire with Approve &amp; restore.
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (poll.phase === "decided") {
+    const dd = poll.decision;
+    return (
+      <div role="status" className="tint-bad flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-2.5 text-sm font-medium animate-pop-in">
+        <DrawnMark kind="fail" delay={0} className="size-5" />
+        <span className="min-w-0 break-words">
+          Rejected in Guild — {dd.operator_reply?.trim() || "no reason given"}
+          {by}
+        </span>
+        {checked}
+      </div>
+    );
+  }
+  if (poll.phase === "stopped") {
+    return (
+      <div role="status" className="tint-neutral flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-2.5 text-[13px] animate-pop-in">
+        <CircleOff className="size-4 shrink-0" strokeWidth={1.75} aria-hidden />
+        <span className="min-w-0 break-words">{poll.why}. No decision was read back.</span>
+        {checked}
+      </div>
+    );
+  }
+  // polling
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="tint-held flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-2.5 text-sm font-medium animate-pop-in"
+    >
+      <span aria-hidden className="relative flex size-2.5 shrink-0">
+        <span className="absolute inset-0 rounded-full bg-held animate-pulse-ring" />
+        <span className="relative size-2.5 rounded-full bg-held" />
+      </span>
+      <span className="min-w-0">{d ? "Waiting for a human in Guild" : "Checking the Guild session…"}</span>
+      {poll.lastError ? (
+        <Tooltip content={poll.lastError}>
+          <span tabIndex={0} className="text-xs font-normal text-muted underline decoration-dotted outline-none">
+            last check failed, retrying
+          </span>
+        </Tooltip>
+      ) : null}
+      {checked}
+    </div>
+  );
+}
+
 /** Proven cure: prove (gates + backtest) -> human approves -> policy applied, agent restored. */
 export function GuardrailPanel({ incidentId }: { incidentId: string }) {
   const { state, recordApproved } = useTripwire();
@@ -147,6 +321,8 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
   const [runKey, setRunKey] = useState(0);
   const [asking, setAsking] = useState(false);
   const [guildUrl, setGuildUrl] = useState<string | null>(null);
+  const guildPoll = useGuildDecision(guildSessionId(guildUrl));
+  const guildApproved = guildPoll.phase === "decided" && guildPoll.decision.status === "approved";
   const proof = local ?? state.guardrails[incidentId]?.proof ?? null;
   const approved = state.guardrails[incidentId]?.approved;
   const nGates = proof?.gates.length ?? 0;
@@ -280,7 +456,12 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
         >
           {/* span wrapper so the tooltip still works while the button is disabled */}
           <span className="inline-flex">
-            <Button variant="default" onClick={approve} disabled={approveDisabled}>
+            <Button
+              variant="default"
+              onClick={approve}
+              disabled={approveDisabled}
+              className={cn(guildApproved && !approveDisabled && "ring-2 ring-ok ring-offset-2 ring-offset-panel")}
+            >
               {approving ? <LoaderCircle className="animate-spin" /> : <ShieldCheck strokeWidth={1.75} />}
               {approved ? `Approved · v${approved.policy_version}` : "Approve & restore"}
             </Button>
@@ -301,6 +482,12 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
           </Tooltip>
         )}
       </div>
+
+      {guildUrl && guildPoll.phase !== "idle" && (
+        <div className="mt-3">
+          <GuildDecisionRow poll={guildPoll} applied={!!approved} />
+        </div>
+      )}
 
       {!proof && !err && (
         <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-dim">

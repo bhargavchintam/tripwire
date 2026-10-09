@@ -2,6 +2,7 @@ import { useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   Ban,
   Database,
+  FlaskConical,
   Globe,
   Hand,
   LoaderCircle,
@@ -19,7 +20,7 @@ import { Chip, CopyId, GlowCard, Kbd, Reveal, SectionHeader, Skeleton, type Chip
 import { BacktestHero } from "../components/analytics/BacktestHero";
 import { api, ApiError } from "../lib/api";
 import { cn } from "../lib/utils";
-import type { Policy } from "../lib/types";
+import type { BacktestResult, Policy } from "../lib/types";
 import { usePolicy, useTripwire } from "../hooks/useTripwire";
 
 type StateTone = Extract<ChipTone, "ok" | "held" | "bad" | "info" | "neutral">;
@@ -328,41 +329,180 @@ function PolicyView({ p, base, compact = false }: { p: Policy; base?: Policy; co
   );
 }
 
+type DiffRow = { key: string; label: string; tone: StateTone; added: string[]; removed: string[] };
+
+/** Real set difference between the current policy and the copilot preview, per section. */
+function policyDiff(cur: Policy, next: Policy): DiffRow[] {
+  const flat = (p: Policy) =>
+    Object.entries(p.allowlists ?? {}).flatMap(([agent, hosts]) => (hosts ?? []).map((h) => `${agent} → ${h}`));
+  const pair = (a: string[] | undefined, b: string[] | undefined) => {
+    const A = new Set(a ?? []);
+    const B = new Set(b ?? []);
+    return { added: [...B].filter((x) => !A.has(x)), removed: [...A].filter((x) => !B.has(x)) };
+  };
+  return [
+    { key: "allow", label: "Allow", tone: "ok" as const, ...pair(flat(cur), flat(next)) },
+    { key: "deny", label: "Deny", tone: "bad" as const, ...pair(cur.denylist, next.denylist) },
+    { key: "risk", label: "High-risk", tone: "held" as const, ...pair(cur.high_risk_actions, next.high_risk_actions) },
+    { key: "fixed", label: "Always denied", tone: "bad" as const, ...pair(cur.fixed_deny_actions, next.fixed_deny_actions) },
+    { key: "untrusted", label: "Untrusted", tone: "held" as const, ...pair(cur.untrusted_sources, next.untrusted_sources) },
+    { key: "internal", label: "Internal", tone: "info" as const, ...pair(cur.internal_hosts, next.internal_hosts) },
+  ].filter((r) => r.added.length || r.removed.length);
+}
+
+/** "What changes" strip: every added item ringed in its state tone, every removed item struck through. */
+function PreviewDiff({ rows }: { rows: DiffRow[] }) {
+  if (!rows.length) {
+    return (
+      <div className="tint-neutral flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px]">
+        <TriangleAlert className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+        The preview is identical to the current policy. Nothing to apply.
+      </div>
+    );
+  }
+  return (
+    <div className="surface-raised flex flex-col divide-y divide-line overflow-hidden" aria-label="Changes in the preview">
+      {rows.map((r, i) => (
+        <div key={r.key} className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-start sm:gap-3">
+          <div className="flex w-32 shrink-0 items-center gap-2 pt-1">
+            <span className="text-[13px] font-semibold text-fg">{r.label}</span>
+            <span className="font-mono text-[12px] text-dim tabular-nums">
+              {r.added.length ? `+${r.added.length}` : ""}
+              {r.added.length && r.removed.length ? " " : ""}
+              {r.removed.length ? `−${r.removed.length}` : ""}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+            {r.added.map((x, j) => (
+              <Chip
+                key={`+${x}`}
+                tone={r.tone}
+                mono
+                size="md"
+                title={`Added: ${x}`}
+                className="max-w-full animate-pop-in ring-2 ring-info ring-offset-2 ring-offset-panel"
+                style={{ animationDelay: `${Math.min((i * 4 + j) * 30, 360)}ms` }}
+              >
+                <span aria-hidden>+</span>
+                <span className="truncate">{x}</span>
+              </Chip>
+            ))}
+            {r.removed.map((x) => (
+              <Chip key={`-${x}`} tone="neutral" mono size="md" title={`Removed: ${x}`} className="max-w-full animate-pop-in">
+                <span aria-hidden>−</span>
+                <span className="truncate line-through decoration-1">{x}</span>
+              </Chip>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Why a copilot preview must not be applied, or null. The copilot is additions-only and keeps the version it
+ * drafted from, so a version mismatch or any removed entry means the preview is stale and would un-apply
+ * newer policy (e.g. hosts an outbreak just denylisted). The copilot path never PUTs such a body.
+ */
+function applyBlock(cur: Policy, preview: Policy, diff: DiffRow[]): string | null {
+  if (preview.version !== cur.version) return `Policy changed to v${cur.version} since this draft. Re-draft.`;
+  const removed = diff.reduce((n, r) => n + r.removed.length, 0);
+  if (removed)
+    return `This preview would remove ${removed} ${removed === 1 ? "entry" : "entries"} from v${cur.version}. The copilot only adds. Re-draft.`;
+  return null;
+}
+
+/** Honest error text from the server detail; 503 means the copilot model is not reachable. */
+function copilotError(e: unknown): { tone: "held" | "bad"; text: string } {
+  const status = e instanceof ApiError ? e.status : 0;
+  const msg = (e as Error).message;
+  const detail = status ? msg.replace(/^\d{3}\s*/, "") : msg;
+  if (status === 503) return { tone: "held", text: `Copilot model unavailable${detail ? ` · ${detail}` : ""}` };
+  if (status === 501) return { tone: "held", text: `Copilot endpoint not wired on this checkpoint yet (501)` };
+  return { tone: "bad", text: `Copilot failed: ${msg}` };
+}
+
 function Copilot({ current, onApplied }: { current: Policy; onApplied: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [preview, setPreview] = useState<Policy | null>(null);
+  const [draftedFrom, setDraftedFrom] = useState<string>("");
+  const [pbt, setPbt] = useState<BacktestResult | null>(null);
+  const [btRunning, setBtRunning] = useState(false);
   const [msg, setMsg] = useState<{ tone: "held" | "bad"; text: string } | null>(null);
+  const diff = preview ? policyDiff(current, preview) : [];
+  const changes = diff.reduce((n, r) => n + r.added.length + r.removed.length, 0);
+  const block = preview ? applyBlock(current, preview, diff) : null;
+
+  function clearPreview() {
+    setPreview(null);
+    setPbt(null);
+    setConfirming(false);
+  }
 
   async function draft() {
     if (!text.trim() || busy) return;
     setBusy(true);
     setMsg(null);
-    setPreview(null);
+    clearPreview();
     try {
-      setPreview(await api.copilot(text.trim()));
+      const p = await api.copilot(text.trim());
+      setPreview(p);
+      setDraftedFrom(text.trim());
     } catch (e) {
-      const status = e instanceof ApiError ? e.status : 0;
-      if (status === 503) setMsg({ tone: "held", text: "Policy copilot not available yet (ai/copilot.py)" });
-      else if (status === 501) setMsg({ tone: "held", text: "Policy copilot endpoint not wired on this checkpoint yet (501)" });
-      else setMsg({ tone: "bad", text: `Copilot failed: ${(e as Error).message}` });
+      setMsg(copilotError(e));
     } finally {
       setBusy(false);
     }
   }
 
-  async function apply() {
-    if (!preview) return;
-    setApplying(true);
+  async function backtestPreview() {
+    if (!preview || btRunning) return;
+    setBtRunning(true);
+    setMsg(null);
     try {
+      setPbt(await api.backtest(preview));
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : 0;
+      const text =
+        status === 501 ? "Backtest not implemented on this checkpoint yet (501)" : `Backtest failed: ${(e as Error).message}`;
+      setMsg({ tone: status === 501 || status === 503 ? "held" : "bad", text });
+      toast.error(text);
+    } finally {
+      setBtRunning(false);
+    }
+  }
+
+  async function apply() {
+    if (!preview || block) return;
+    setApplying(true);
+    setMsg(null);
+    try {
+      // Re-read the live policy right before the PUT: the preview is a full Policy drafted from the version
+      // it carries, so if anything (an outbreak denylist push, a guardrail approve) bumped it since, PUTting
+      // the stale preview would silently drop those entries. Refuse instead of overwriting.
+      const live = await api.policy();
+      const liveBlock = applyBlock(live, preview, policyDiff(live, preview));
+      if (liveBlock) {
+        setMsg({ tone: "held", text: liveBlock });
+        toast.error(liveBlock);
+        setConfirming(false);
+        onApplied();
+        return;
+      }
       const saved = await api.putPolicy(preview);
-      toast.success(`Policy applied · v${saved.version ?? "?"}`);
-      setPreview(null);
+      toast.success(`Policy applied · v${saved.version ?? "?"}`, { description: draftedFrom || undefined });
+      clearPreview();
       setText("");
       onApplied();
     } catch (e) {
-      toast.error(`Apply failed: ${(e as Error).message}`);
+      const text = `Apply failed: ${(e as Error).message}`;
+      setMsg({ tone: "bad", text });
+      toast.error(text);
+      setConfirming(false);
     } finally {
       setApplying(false);
     }
@@ -388,7 +528,7 @@ function Copilot({ current, onApplied }: { current: Policy; onApplied: () => voi
         </>
       }
       title="Describe a change in plain English"
-      description="A draft appears next to the current policy. Nothing changes until you press Apply."
+      description="A draft appears next to the current policy. Backtest it, then apply it yourself. Nothing changes until you confirm."
       actions={
         <Chip tone="neutral" mono>
           never auto-applied
@@ -402,12 +542,14 @@ function Copilot({ current, onApplied }: { current: Policy; onApplied: () => voi
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
           rows={3}
+          disabled={busy}
           aria-label="Describe the policy change in plain English"
           placeholder='e.g. "support-bot may post to hooks.chat.example; block paste.example.org for everyone"'
           className={cn(
             "block w-full resize-y rounded-[var(--radius-control)] border border-line bg-panel-2 px-4 py-3 text-sm leading-6 text-fg",
             "shadow-[inset_0_1px_2px_rgb(21_22_26/0.04)] transition-[border-color,box-shadow,background-color] duration-200 placeholder:text-dim",
             "hover:border-line-strong focus:border-model-line focus:bg-panel focus:shadow-[0_0_0_3px_var(--color-model-soft)] focus:outline-none",
+            "disabled:cursor-progress disabled:opacity-80",
           )}
         />
         {busy && (
@@ -418,20 +560,60 @@ function Copilot({ current, onApplied }: { current: Policy; onApplied: () => voi
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" onClick={draft} disabled={busy || !text.trim()}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <Sparkles />} Draft policy
+          {busy ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {busy ? "Drafting…" : "Draft policy"}
           <Kbd className="ml-1.5">⌘↵</Kbd>
         </Button>
         {preview && (
           <>
-            <Button variant="ok" onClick={apply} disabled={applying}>
-              {applying ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />} Apply (PUT /policy)
+            <Button variant="outline" onClick={backtestPreview} disabled={btRunning || applying}>
+              {btRunning ? <LoaderCircle className="animate-spin" /> : <FlaskConical />} Backtest this preview
             </Button>
-            <Button variant="ghost" onClick={() => setPreview(null)}>
-              Discard
-            </Button>
+            {!confirming ? (
+              <Tooltip content={block ?? (changes ? "Review, then confirm. PUT /policy" : "The preview has no changes")}>
+                <span className="inline-flex">
+                  <Button variant="ok" onClick={() => setConfirming(true)} disabled={applying || changes === 0 || !!block}>
+                    <ShieldCheck /> Apply preview
+                  </Button>
+                </span>
+              </Tooltip>
+            ) : (
+              <span
+                role="group"
+                aria-label="Confirm applying the preview"
+                className="tint-ok inline-flex flex-wrap items-center gap-2 rounded-full border py-1 pr-1 pl-3.5 text-[13px] animate-pop-in"
+              >
+                <span>
+                  Replace policy <span className="font-mono font-semibold">v{current.version}</span> with this preview ·{" "}
+                  <span className="tabular-nums">{changes}</span> {changes === 1 ? "change" : "changes"}
+                  {pbt ? "" : " · not backtested"}
+                </span>
+                <Button size="sm" variant="ok" onClick={apply} disabled={applying || !!block} autoFocus className="bg-panel">
+                  {applying ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />} Confirm apply
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={applying}>
+                  Cancel
+                </Button>
+              </span>
+            )}
+            {!confirming && (
+              <Button variant="ghost" onClick={clearPreview} disabled={applying}>
+                Discard
+              </Button>
+            )}
           </>
         )}
-        {msg && (
+        {block && (
+          <span
+            role="alert"
+            className="tint-held inline-flex flex-wrap items-center gap-1.5 rounded-full border py-1 pr-1 pl-3 text-[13px] animate-pop-in"
+          >
+            <TriangleAlert className="size-3.5 shrink-0" strokeWidth={1.75} /> {block}
+            <Button size="sm" variant="ghost" onClick={draft} disabled={busy || !text.trim()} className="bg-panel">
+              <Sparkles /> Re-draft
+            </Button>
+          </span>
+        )}
+        {msg && msg.text !== block && (
           <span
             role="status"
             className={cn(
@@ -443,28 +625,60 @@ function Copilot({ current, onApplied }: { current: Policy; onApplied: () => voi
           </span>
         )}
       </div>
+      {busy && (
+        <div role="status" aria-label="Drafting the policy preview" className="mt-2 grid gap-4 border-t border-line pt-4 lg:grid-cols-2">
+          <Skeleton className="h-40 rounded-xl" />
+          <Skeleton className="h-40 rounded-xl" />
+        </div>
+      )}
       {preview && (
-        <div className="mt-2 grid gap-4 border-t border-line pt-4 lg:grid-cols-2">
+        <div className="mt-2 flex flex-col gap-4 border-t border-line pt-4">
           <Reveal index={0} trigger="mount">
-            <div className="mb-2.5 flex items-center gap-2">
-              <span className="eyebrow">Current</span>
-              <Chip tone="paper" mono>
-                v{current.version}
-              </Chip>
-            </div>
-            <PolicyView p={current} compact />
-          </Reveal>
-          <Reveal index={2} trigger="mount">
             <div className="mb-2.5 flex flex-wrap items-center gap-2">
-              <span className="eyebrow text-info">Preview · not applied</span>
-              {preview.mock ? <Badge variant="held">mock</Badge> : null}
-              <span className="ml-auto flex items-center gap-1.5 text-[12px] text-dim">
-                <span aria-hidden className="size-2.5 rounded-full ring-2 ring-info ring-offset-1 ring-offset-panel" />
-                ringed = new
+              <span className="eyebrow text-info">What changes</span>
+              <span className="font-mono text-[12px] text-dim tabular-nums">
+                {changes} {changes === 1 ? "change" : "changes"} vs v{current.version}
               </span>
+              {draftedFrom ? (
+                <span className="ml-auto max-w-full truncate text-[12px] text-dim" title={draftedFrom}>
+                  from “{draftedFrom}”
+                </span>
+              ) : null}
             </div>
-            <PolicyView p={preview} base={current} compact />
+            <PreviewDiff rows={diff} />
           </Reveal>
+          {(pbt || btRunning) && (
+            <Reveal index={1} trigger="mount">
+              <BacktestHero
+                bt={pbt}
+                running={btRunning}
+                title="Preview over all of tripwire.events"
+                emptyHint="Running the backtest on the preview…"
+              />
+            </Reveal>
+          )}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Reveal index={2} trigger="mount">
+              <div className="mb-2.5 flex items-center gap-2">
+                <span className="eyebrow">Current</span>
+                <Chip tone="paper" mono>
+                  v{current.version}
+                </Chip>
+              </div>
+              <PolicyView p={current} compact />
+            </Reveal>
+            <Reveal index={3} trigger="mount">
+              <div className="mb-2.5 flex flex-wrap items-center gap-2">
+                <span className="eyebrow text-info">Preview · not applied</span>
+                {preview.mock ? <Badge variant="held">mock</Badge> : null}
+                <span className="ml-auto flex items-center gap-1.5 text-[12px] text-dim">
+                  <span aria-hidden className="size-2.5 rounded-full ring-2 ring-info ring-offset-1 ring-offset-panel" />
+                  ringed = new
+                </span>
+              </div>
+              <PolicyView p={preview} base={current} compact />
+            </Reveal>
+          </div>
         </div>
       )}
     </GlowCard>

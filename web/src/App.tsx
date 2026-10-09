@@ -11,6 +11,7 @@ import {
   ScrollText,
   Siren,
   Undo2,
+  Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { MotionConfig, motion } from "motion/react";
@@ -27,6 +28,7 @@ import { IncidentsTab } from "./tabs/IncidentsTab";
 import { api } from "./lib/api";
 import { TripwireContext, useTripwireStream, type TripwireCtx } from "./hooks/useTripwire";
 import { PresenterContext, usePresenterState } from "./hooks/usePresenter";
+import { useVoice } from "./hooks/useVoice";
 
 // Heavy / secondary tabs load on first open so the main chunk stays small (Recharts lives in Evidence).
 const EvidenceTab = lazy(() => import("./tabs/EvidenceTab"));
@@ -90,17 +92,20 @@ function restoreLastQuarantined(state: TripwireCtx["state"]) {
   else toast("No quarantined agent to restore");
 }
 
-/** Presenter shortcuts: R replay · X restore most recently quarantined · H hold · P presenter · 0 reset · ⌘K/Ctrl+K palette. */
+/** Presenter shortcuts: R replay · X restore most recently quarantined · H hold · P presenter · V voice · 0 reset · ⌘K/Ctrl+K palette. */
 function useShortcuts(
   ctx: TripwireCtx,
   togglePresenter: () => void,
   paletteOpen: boolean,
   setPaletteOpen: (open: boolean) => void,
+  toggleVoice: () => void,
 ) {
   const ref = useRef(ctx);
   ref.current = ctx;
   const presRef = useRef(togglePresenter);
   presRef.current = togglePresenter;
+  const voiceRef = useRef(toggleVoice);
+  voiceRef.current = toggleVoice;
   const paletteRef = useRef({ open: paletteOpen, set: setPaletteOpen });
   paletteRef.current = { open: paletteOpen, set: setPaletteOpen };
   useEffect(() => {
@@ -122,6 +127,7 @@ function useShortcuts(
       else if (k === "h") toggleHold(state.holdEnabled, setHold);
       else if (k === "p") presRef.current();
       else if (k === "x") restoreLastQuarantined(state);
+      else if (k === "v") voiceRef.current();
       else return;
       e.preventDefault();
     };
@@ -137,7 +143,8 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const open = useCallback((id: string) => setOpenId(id), []);
-  useShortcuts(ctx, presenter.toggle, paletteOpen, setPaletteOpen);
+  const voice = useVoice(ctx.state);
+  useShortcuts(ctx, presenter.toggle, paletteOpen, setPaletteOpen, voice.toggle);
   const openCount = Object.values(ctx.state.incidents).filter((i) => !i.closed_ms).length;
 
   const { state, setHold } = ctx;
@@ -205,6 +212,20 @@ export default function App() {
       detail: onOff(presenter.on),
       run: presenter.toggle,
     },
+    ...(voice.supported
+      ? [
+          {
+            id: "voice",
+            group: "Modes",
+            label: "Toggle voice announcer",
+            icon: Volume2,
+            shortcut: "V",
+            detail: voice.on ? "ON" : "OFF",
+            keywords: "speak speech audio announce",
+            run: voice.toggle,
+          },
+        ]
+      : []),
     ...TABS.map((t) => ({
       id: `tab:${t.value}`,
       group: "Go to",
@@ -228,7 +249,7 @@ export default function App() {
       >
         {/* Direct child of the full-height shell so it stays sticky while scrolling. */}
         <MockBanner />
-        <Header onOpenCommands={() => setPaletteOpen(true)} commandsHint={PALETTE_KEY_HINT} />
+        <Header onOpenCommands={() => setPaletteOpen(true)} commandsHint={PALETTE_KEY_HINT} voice={voice} />
         <main className="mx-auto max-w-[1440px] px-6 pb-24">
           <Tabs value={tab} onValueChange={setTab}>
             {/* Floating, centred pill nav: sticky below the (optional) MOCK banner. */}

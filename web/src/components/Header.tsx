@@ -1,4 +1,4 @@
-import { Command, Hand, LoaderCircle, Presentation, TriangleAlert, WifiOff } from "lucide-react";
+import { Command, Hand, LoaderCircle, Presentation, TriangleAlert, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { Segmented } from "./ui/segmented";
 import { Tooltip } from "./ui/tooltip";
@@ -8,6 +8,7 @@ import { isNum } from "../lib/format";
 import { cn } from "../lib/utils";
 import { useTripwire } from "../hooks/useTripwire";
 import { usePresenter } from "../hooks/usePresenter";
+import type { Voice } from "../hooks/useVoice";
 
 /** PUT /config hold_enabled = next (the server's answer wins). Same toasts as before. */
 export async function setHoldTo(next: boolean, setHold: (v: boolean) => void) {
@@ -108,6 +109,30 @@ export function PresenterPill() {
   );
 }
 
+/**
+ * Voice announcer toggle (E2). Speaks only real stream changes: new incidents, outbreak traces and
+ * policy and hold-mode denials. OFF by default, persisted per browser. Hidden when speechSynthesis is missing.
+ */
+export function VoicePill({ voice }: { voice: Voice }) {
+  const presenter = usePresenter();
+  if (!voice.supported) return null;
+  const Icon = voice.on ? Volume2 : VolumeX;
+  return (
+    <Tooltip content="Voice: reads out new incidents, outbreak traces, and policy and hold-mode denials as they arrive (browser speech, never invented). Shortcut: V">
+      <button
+        onClick={voice.toggle}
+        aria-pressed={voice.on}
+        aria-label="Voice announcer"
+        className={cn(CONTROL, voice.on && "tint-brand border hover:border-brand-line hover:text-brand")}
+      >
+        <Icon strokeWidth={1.75} />
+        {!presenter.on && <span className="hidden min-[1100px]:inline">Voice</span>}
+        <Kbd className="ml-0">V</Kbd>
+      </button>
+    </Tooltip>
+  );
+}
+
 /** Opens the command palette. */
 export function CommandsPill({ onClick, hint }: { onClick: () => void; hint: string }) {
   return (
@@ -160,9 +185,13 @@ export function MockBanner() {
 
 /**
  * App bar: logo mark + "Tripwire" wordmark + mono eyebrow on the left; live events/s, connection,
- * Hold mode, Presenter and ⌘K on the right. The floating tab nav (sticky) lives in App.
+ * Hold mode, Voice, Presenter and ⌘K on the right. The floating tab nav (sticky) lives in App.
  */
-export function Header({ onOpenCommands, commandsHint }: { onOpenCommands?: () => void; commandsHint?: string } = {}) {
+export function Header({
+  onOpenCommands,
+  commandsHint,
+  voice,
+}: { onOpenCommands?: () => void; commandsHint?: string; voice?: Voice } = {}) {
   const { state } = useTripwire();
   const presenter = usePresenter();
   // Mock sends events_per_s at the top level; real heartbeats nest it under Heartbeat.metrics.
@@ -196,6 +225,7 @@ export function Header({ onOpenCommands, commandsHint }: { onOpenCommands?: () =
           )}
           <LivePill />
           <HoldPill />
+          {voice && <VoicePill voice={voice} />}
           <PresenterPill />
           {!presenter.on && onOpenCommands && <CommandsPill onClick={onOpenCommands} hint={commandsHint ?? "⌘K"} />}
         </div>

@@ -21,10 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
-from checkpoint import fleet, guardrail, hold
+from checkpoint import fleet, guardrail, guild_readback, hold
 from checkpoint.auth import require_token
 from checkpoint.bus import Bus
 from checkpoint.chread import CHReader, CHUnavailable
@@ -67,6 +67,10 @@ class GuildRunIn(BaseModel):
     agent_id: Optional[str] = None  # "owner~agent-name" or UUID; default = picked by role
     prompt: Optional[str] = None
     role: Literal["worker", "responder"] = "worker"  # worker = …~*deploy-bot, responder = …~*responder
+
+
+class CopilotIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 
 # Agent ids end up in URL paths (/block/{agent_id}, /restore/{agent_id}); refuse path-like ids at
@@ -300,19 +304,40 @@ def create_app(
         except CHUnavailable as exc:
             raise _ch_503(exc) from exc
 
-    def _phase2() -> JSONResponse:
-        return JSONResponse(status_code=501, content={"detail": "phase 2"})
-
     @app.post("/policy/copilot", dependencies=auth)
-    async def policy_copilot() -> JSONResponse:
-        # Master §7a: 503 until Sripadha's ai/copilot.py exists; then 501 until it is wired here.
+    async def policy_copilot(request: Request) -> JSONResponse:
+        """Master §7a: {text} -> a PREVIEW Policy (same version, never applied here; the UI decides).
+
+        503 when ai/copilot.py is missing or its AkashML model cannot draft; 422 for a bad body.
+        X-Copilot-Model / X-Copilot-Latency-Ms are measured from the call that answered."""
         try:
             present = importlib.util.find_spec("ai.copilot") is not None
         except (ImportError, ValueError):
             present = False
         if not present:
             return JSONResponse(status_code=503, content={"detail": "ai/copilot.py not available yet"})
-        return _phase2()
+        try:
+            body = CopilotIn.model_validate(await request.json())
+        except Exception as exc:  # noqa: BLE001 - JSON decode or validation error -> 422
+            raise HTTPException(status_code=422, detail="body must be {\"text\": \"1..500 characters\"}") from exc
+        if not body.text.strip():
+            raise HTTPException(status_code=422, detail="text must not be blank")
+        copilot = importlib.import_module("ai.copilot")
+        try:
+            preview, meta = await copilot.draft_policy_with_meta(body.text, state.policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - CopilotUnavailable or anything the model path raised
+            reason = " ".join(str(exc).split())[:160] or type(exc).__name__
+            return JSONResponse(status_code=503, content={"detail": f"copilot model unavailable: {reason}"})
+        headers = {
+            "X-Copilot-Model": str(meta.get("model", "")).encode("ascii", "replace").decode("ascii"),
+            "X-Copilot-Latency-Ms": f"{float(meta.get('latency_ms', 0.0)):.1f}",
+            "X-Copilot-Rejected": str(len(meta.get("rejected") or [])),
+            "X-Decision-Source": "akashml",
+            "Access-Control-Expose-Headers": "X-Copilot-Model, X-Copilot-Latency-Ms, X-Copilot-Rejected, X-Decision-Source",
+        }
+        return JSONResponse(status_code=200, content=preview.model_dump(), headers=headers)
 
     # ---------------------------------------------------------------- guardrail (proven cure)
     @app.post("/guardrail/{incident_id}/prove", dependencies=auth)
@@ -408,6 +433,21 @@ def create_app(
                 "body": r.text[:GUILD_BODY_MAX],
             },
         )
+
+    @app.get("/guild/session/{session_id}/decision", dependencies=auth)
+    async def guild_session_decision(session_id: str) -> JSONResponse:
+        """Human approval read-back from the Guild Responder session (checkpoint/guild_readback.py):
+        {status: waiting|approved|rejected, operator_reply, decided_by, source, checked_ms}.
+        503 when the guild CLI is missing; 502 when it fails, times out or too many reads are in flight.
+        Behind the same token check as /guild/run because each uncached read spawns a CLI process."""
+        if not guild_readback.valid_session_id(session_id):
+            raise HTTPException(status_code=422, detail="session_id must match [0-9a-f-]{8,64}")
+        try:
+            return JSONResponse(status_code=200, content=await guild_readback.read_decision(session_id))
+        except guild_readback.CLIMissing as exc:
+            return JSONResponse(status_code=503, content={"detail": str(exc)})
+        except guild_readback.CLIFailed as exc:
+            return JSONResponse(status_code=502, content={"detail": str(exc)})
 
     # ---------------------------------------------------------------- UI (mounted LAST)
     if web_dist is not None and Path(web_dist).is_dir():

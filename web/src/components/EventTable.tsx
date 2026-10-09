@@ -8,24 +8,39 @@ import { eventKey, isHoldReason, isSnapshotSwap } from "./live/streamChange";
 import { fmtClock } from "../lib/format";
 import { cn } from "../lib/utils";
 import { useTripwire } from "../hooks/useTripwire";
+import { AgentStateAtT, TimeScrubber, TimeTravelChip } from "./timetravel/TimeScrubber";
+import { agentStateAt, eventTimes, eventsUpTo } from "./timetravel/timeTravel";
 
 const COLS = "grid grid-cols-[104px_148px_112px_minmax(0,1fr)_136px_108px] items-center gap-3";
 const ROW_H = 40;
 
-/** Virtualized live event table: last 200 tool events of live agents (newest first), filterable by agent. */
+/**
+ * Virtualized live event table: last 200 tool events of live agents (newest first), filterable by agent.
+ * D9 time travel: a scrubber over these same real events; while scrubbed the table shows only rows at or
+ * before T plus each agent's state at T (client-side tallies). Live resumes the stream view.
+ */
 export function EventTable() {
   const { state } = useTripwire();
   const all = state.events;
   const [agent, setAgent] = useState<string | null>(null);
+  const [at, setAt] = useState<number | null>(null); // null = live
+  const times = useMemo(() => eventTimes(all), [all]);
+  // A reset/snapshot that empties the table (or leaves < 2 events) returns to live.
+  const t = times.length < 2 ? null : at;
+  const scoped = useMemo(() => eventsUpTo(all, t), [all, t]);
 
   // Per-agent counts of the rows on screen (display only: a filter, never a metric).
   const agents = useMemo(() => {
     const m = new Map<string, number>();
-    for (const e of all) m.set(e.agent_id, (m.get(e.agent_id) ?? 0) + 1);
+    for (const e of scoped) m.set(e.agent_id, (m.get(e.agent_id) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [all]);
+  }, [scoped]);
   const active = agent && agents.some(([a]) => a === agent) ? agent : null;
-  const rows = useMemo(() => (active ? all.filter((e) => e.agent_id === active) : all), [all, active]);
+  const rows = useMemo(() => (active ? scoped.filter((e) => e.agent_id === active) : scoped), [scoped, active]);
+  const atT = useMemo(
+    () => (t === null ? [] : agentStateAt(scoped).filter((a) => !active || a.agent_id === active)),
+    [scoped, t, active],
+  );
 
   const parentRef = useRef<HTMLDivElement>(null);
   const v = useVirtualizer({
@@ -60,8 +75,11 @@ export function EventTable() {
       }
       title="Live tool calls"
       actions={
-        <span className="font-mono text-[12px] text-dim">
-          {rows.length} shown{active ? ` of ${all.length}` : ""} · live agents only
+        <span className="flex flex-wrap items-center justify-end gap-2">
+          {t !== null && <TimeTravelChip t={t} />}
+          <span className="font-mono text-[12px] text-dim">
+            {rows.length} shown{active || t !== null ? ` of ${all.length}` : ""} · live agents only
+          </span>
         </span>
       }
       bodyClassName="flex min-h-0 flex-col gap-3 pt-1"
@@ -79,7 +97,7 @@ export function EventTable() {
               !active ? "tint-brand" : "border-line bg-panel text-muted hover:border-line-strong hover:text-fg",
             )}
           >
-            All <span className="font-mono text-[12px] opacity-75">{all.length}</span>
+            All <span className="font-mono text-[12px] opacity-75">{scoped.length}</span>
           </button>
           {agents.map(([a, n]) => {
             const on = active === a;
@@ -102,6 +120,9 @@ export function EventTable() {
           })}
         </div>
       )}
+
+      <TimeScrubber times={times} t={t} onChange={setAt} />
+      {t !== null && <AgentStateAtT agents={atT} t={t} />}
 
       <div className="overflow-x-auto rounded-xl border border-line">
         <div className="min-w-[760px]">
@@ -131,7 +152,9 @@ export function EventTable() {
               <div className="grid h-full place-items-center p-6 text-center">
                 <div className="flex flex-col items-center gap-2 text-dim">
                   <Radio className="size-5" strokeWidth={1.75} />
-                  <span className="text-[14px]">No tool calls yet.</span>
+                  <span className="text-[14px]">
+                    {t !== null ? "No retained tool calls at or before this time." : "No tool calls yet."}
+                  </span>
                 </div>
               </div>
             ) : (
@@ -140,7 +163,7 @@ export function EventTable() {
                   const e = rows[item.index];
                   const denied = e.result === "denied";
                   const held = denied && isHoldReason(e.reason);
-                  const isFlash = flash === item.key && e === all[0];
+                  const isFlash = t === null && flash === item.key && e === all[0];
                   return (
                     <div
                       key={item.key}
