@@ -104,10 +104,10 @@ export function SponsorsTab() {
       <Sponsor
         icon={<Bug className="text-bad" />}
         name="Semgrep"
-        role="A custom agent-security ruleset scans the agent tools; runtime events carry code_ref (file:line) so a denial links back to the vulnerable code."
+        role="Semgrep scans the AI-written code with a custom agent-security ruleset; runtime events carry code_ref (file:line) so a denial can link back to code."
         proof={
           <>
-            <span>findings in semgrep/FINDINGS.md</span>
+            <span>scan results: semgrep/FINDINGS.md in the repo</span>
             <span className="text-muted">last code_ref: {lastCodeRef ?? DASH}</span>
           </>
         }
@@ -115,7 +115,7 @@ export function SponsorsTab() {
       <Sponsor
         icon={<Workflow className="text-info" />}
         name="Guild"
-        role="A Guild-hosted agent (guild:deploy-bot) is governed by the same checkpoint; a Guild Responder adds the human approval step."
+        role="A Guild-hosted agent (guild:*) runs in the Guild workspace and is governed by the same checkpoint: its tool calls pass through Tripwire like any other agent's."
         action={<GuildRun />}
         proof={
           guildAgents.length ? (

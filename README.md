@@ -70,15 +70,16 @@ Every number here comes from a receipt. Synthetic background data is labelled `s
 | Policy backtest over full history | **30,000,550 events in 683 ms** | ClickHouse Cloud | `status/bindu.md` 11:20 (proven-cure rehearsal) |
 | Policy backtest, re-run | 30,000,570 rows, median **650 ms** (3 runs, 646–652 ms) | ClickHouse Cloud | `checkpoint/fleet.backtest_history`, 18:22 UTC |
 | Policy backtest, local | 30M events in **194 ms** | local Docker | commit `e464e22` |
-| Hold decision (send held + denied) | **≈124 ms**, including a 113 ms ClickHouse history lookup | ClickHouse Cloud (~37 ms RTT from the venue) | `status/bindu.md` 11:20 |
-| Hold decision, local | ~84 ms, including the ClickHouse lookup | local Docker | commit `e464e22` |
+| Hold decision with **AkashML** (the demo path): send held → denied → agent quarantined | **≈1.6 s** (1,620 ms and 1,587 ms; model call 1,223–1,454 ms; Llama-3.3-70B, malicious 0.9, 771 in / 60 out tokens) | ClickHouse Cloud + AkashML | live audit run, 12:09–12:13 |
+| Hold decision, rule path only (no model call) | ≈124 ms incl. a 113 ms ClickHouse history lookup (Cloud) · ~84 ms (local) | Cloud / local Docker | `status/bindu.md` 11:20; commit `e464e22` |
+| Detector path (hold OFF): attack seen → `/block` | **988 ms** from the send step to detection (n=1), model verdict incl.; next action denied | ClickHouse Cloud + AkashML | live audit run, 12:09–12:13 |
 | Honeytoken trip | denied at the send step, **0 ms**, no model | ClickHouse Cloud run | `status/bindu.md` 11:20 |
 | False positives on `normal_ops` (hold ON) | **10/10 allowed** | ClickHouse Cloud run | `status/bindu.md` 11:20 |
 | Proven-cure gates | **4/4 passed** (incl. `normal_ops_ok`), then approve sets policy v2 | ClickHouse Cloud run | `status/bindu.md` 11:20 |
 | Fleet heatmap | 42 agents / 29.5M rows in **421 ms** | local Docker | commit `e464e22` |
 | Fleet heatmap, 72 h | 42 agents / 29,674,435 rows, median **1,479 ms** (3 runs) | ClickHouse Cloud | `checkpoint/fleet.heatmap`, 18:22 UTC |
 | AkashML JSON verdict, 1 sample each | Llama-3.3-70B 1.2 s · gpt-oss-120b 1.2 s · gpt-oss-20b 4.9 s (over the 3 s hold budget) | AkashML API | `status/bindu.md` (stamped 11:25) |
-| Tests | `make check` **152 passed** (both tracks, local ClickHouse) | laptop | `make check` at `eff542a` |
+| Tests | `make check` **153 passed** (both tracks, local ClickHouse) | laptop | `make check` at `e8d464a` |
 | Core-gate acceptance (master §12, each run ×3, both containment paths: hold mode + detector) | **16/16 passed** on local + deterministic rule · **16/16** on local + real AkashML · **16/16 on ClickHouse Cloud + real AkashML** (115 s), 0 test rows left behind | laptop → local / Cloud | `make e2e`, `make e2e-cloud` at `eff542a`, 11:55 |
 | Precision / recall, time-to-detect (hold OFF), AkashML vs OpenAI cost per 1k events | — | — | to be measured (`/evidence`) |
 

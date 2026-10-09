@@ -477,3 +477,21 @@ async def test_demo_reset_full_restores_default_policy_plain_reset_keeps_it(clie
     assert full["full"] is True and full["policy_version"] == v_set + 1
     fresh = (await client.get("/policy")).json()
     assert fresh["denylist"] == [] and fresh["version"] == v_set + 1
+
+
+async def test_demo_reset_full_clears_samples_and_test_agents(client, svc):
+    st = svc.state
+    for a in ("deploy-bot", "acc-123-1-deploy", "verify:deploy-bot"):
+        assert (await client.post("/tool", json={"agent_id": a, "action": "read_file", "target": "/app/config.yml"})).status_code == 200
+    st.hold_samples.extend([113.0, 1600.0])
+    st.ttc_samples.append(90.0)
+    st.timing("detector").append(50.0)
+
+    await client.post("/demo/reset")  # plain reset keeps both
+    assert len(st.hold_samples) == 2 and "acc-123-1-deploy" in st.last_ts
+
+    await client.post("/demo/reset?full=1")
+    assert not st.hold_samples and not st.ttc_samples and not st.timing_samples
+    active = (await client.get("/status")).json()["active"]
+    assert "deploy-bot" in active
+    assert not any(a.startswith(("acc-", "verify:")) for a in active)

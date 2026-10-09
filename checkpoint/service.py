@@ -48,6 +48,8 @@ __all__ = ["Checkpoint", "Conflict", "NotFound", "host_of", "HTTP_ACTIONS", "FIX
 _DEFAULT = object()
 REPLAY_BLOCK_WAIT_S = 10.0
 REPLAYS_MAX = 50
+# Agent-id prefixes used by tests / sandboxed verification; a full demo reset forgets them.
+TEST_AGENT_PREFIXES = ("acc-", "e2e-", "test-", "verify:")
 _SCENARIO_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
@@ -95,8 +97,11 @@ class Checkpoint:
         fixtures_dir: Path = FIXTURES_DIR,
         history_lookup: Any = _DEFAULT,
         classify: ClassifyFn | None = None,
+        hold_check: str | None = None,
     ) -> None:
         self.writer = writer
+        # This app's own HOLD_CHECK ("stub" | "real"); None = read the global .env.
+        self.hold_check = hold_check
         self.state = state
         self.bus = bus
         self.ch = ch
@@ -116,7 +121,8 @@ class Checkpoint:
         return await hold_history(self.ch, agent_id, host, before_ms)
 
     def classify_fn(self) -> ClassifyFn:
-        return self.classify_override or hold.get_classify()
+        want_real = None if self.hold_check is None else self.hold_check == "real"
+        return self.classify_override or hold.get_classify(want_real=want_real)
 
     # ------------------------------------------------------------------ helpers
     def emit(self, type_: Any, data: dict[str, Any]) -> None:
@@ -479,6 +485,20 @@ class Checkpoint:
 
             st.policy = Policy(version=st.policy.version + 1)
             st.proofs.clear()
+            # Evidence must describe THIS take: drop timing samples from earlier modes/runs
+            # (e.g. rule-only stub holds mixed with AkashML holds) — they repopulate live.
+            for d in (st.ttd_samples, st.ttc_samples, st.hold_samples, st.honey_ttc_samples, st.hold_receipts):
+                d.clear()
+            st.timing_samples.clear()
+            # Forget test/verification agents (acc-*, e2e-*, test-*, verify:*) so the console
+            # shows only the live fleet. Hash-chain heads are kept (audit continuity).
+            stale = [a for a in set(st.last_ts) | set(st.modes) | set(st.watermarks) if a.startswith(TEST_AGENT_PREFIXES)]
+            for a in stale:
+                st.last_ts.pop(a, None)
+                st.modes.pop(a, None)
+                st.watermarks.pop(a, None)
+                st.blocked.discard(a)
+                st.rings.pop(a, None)
             self.emit("metrics", {"source": "checkpoint", "kind": "policy", "policy_version": st.policy.version})
         agents = sorted(set(st.last_ts) | set(st.modes) | st.blocked | set(st.watermarks))
         for a in agents:

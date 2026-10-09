@@ -102,6 +102,7 @@ def create_app(
         fixtures_dir=fixtures_dir,
         history_lookup=history_lookup,
         classify=classify,
+        hold_check=settings.hold_check,
     )
 
     @asynccontextmanager
@@ -113,7 +114,7 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"startup: chain reconcile skipped ({exc!r})")
             await svc.ch.warm("hold")  # hold-mode history lookups must not pay the connect cost
-        hold.get_classify()
+        svc.classify_fn()  # resolve this app's classifier (stub or AkashML) up front
         await writer.start()
         save_task = asyncio.create_task(state.save_loop(), name="tripwire-state-save")
         logger.info(

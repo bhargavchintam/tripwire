@@ -1,5 +1,5 @@
-# Tripwire — canonical commands. Scaffold prepared pre-kickoff.
-# Implementation files (checkpoint/, agents/, etc.) are created DURING the event.
+# Tripwire — canonical commands. This Makefile and the empty folder layout were set up
+# during pre-event prep (tooling only, no project code); all implementation was written during the event.
 # Until a target's code exists, it no-ops with a friendly message instead of failing,
 # so `make check` is safe to run from the very first commit.
 

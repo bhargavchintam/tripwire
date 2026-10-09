@@ -332,12 +332,24 @@ _last_real_attempt: float = 0.0
 REAL_RETRY_S = 30.0
 
 
-def get_classify(force_reload: bool = False) -> ClassifyFn:
+def get_classify(force_reload: bool = False, want_real: bool | None = None) -> ClassifyFn:
     """The classify() to use now. With HOLD_CHECK=real and ai.quick_check not importable yet,
     the stub is used and the import is retried every 30 s, so Sripadha's module is picked
-    up automatically when it lands (no restart)."""
+    up automatically when it lands (no restart).
+
+    want_real: the calling app's own setting (Checkpoint passes settings.hold_check). None falls
+    back to the global .env. An app configured for the stub always gets the stub and never
+    touches the process-wide real-classify cache (12:25 fix: tests built with hold_check="stub"
+    were calling AkashML because this read the global .env)."""
     global _classify, classify_source, _last_real_attempt
-    want_real = get_settings().hold_check == "real"
+    explicit = want_real is not None
+    if want_real is None:
+        want_real = get_settings().hold_check == "real"
+    if not want_real:
+        if explicit:  # an app configured for the stub: never touch the shared real cache
+            return stub_classify
+        _classify, classify_source = stub_classify, "stub"  # global setting says stub
+        return _classify
     fallback = classify_source.startswith("stub (real import failed")
     retry = want_real and fallback and time.monotonic() - _last_real_attempt >= REAL_RETRY_S
     if _classify is not None and not force_reload and not retry:
