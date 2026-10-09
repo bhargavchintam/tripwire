@@ -567,3 +567,35 @@ def test_cli_rejects_bad_arguments_and_once_exits_1_when_checkpoint_is_unreachab
     out = res.stdout
     summary = json.loads(out[out.index("{") :])
     assert summary["iteration"] == 1 and summary["error"].startswith("checkpoint /status")
+
+
+# ---------------------------------------------------------------------------
+# Module-level run_once(client): the in-process entry point tests/e2e/test_acceptance.py calls
+# ---------------------------------------------------------------------------
+
+
+async def test_module_run_once_uses_given_client_and_blocks() -> None:
+    """run_once(client=...) must do one pass through the injected HTTP client only (never CHECKPOINT_URL),
+    post /block for a malicious funnel hit, send the token header, and not close the caller's client."""
+    from detection import loop as loop_mod
+
+    fcp = FakeCheckpoint()
+    ch = FakeCH({"funnel": [FUNNEL_HIT], "recent_events": ATTACK_EVENTS})
+
+    async def malicious(inp: QuickCheckInput) -> Verdict:
+        return Verdict(verdict="malicious", confidence=0.97, reason="test", decision_source="akashml", model_ids=["m"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fcp.handler), base_url="http://checkpoint.test") as c:
+        summary = await loop_mod.run_once(c, ch=ch, classify=malicious, token="tok-123")
+        assert summary["error"] is None and summary["blocks"] == 1, summary
+        posts = [r for r in fcp.requests if r[0] == "POST"]
+        assert any(r[1].startswith("/block/") for r in posts), fcp.requests
+        assert all(r[3].get("x-tripwire-token") == "tok-123" for r in posts), [r[3] for r in posts]
+        # the caller's client is still usable (not closed by the detector)
+        assert (await c.get("/status")).status_code == 200
+    # signature contract Bindu's test relies on: a parameter named `client`, nothing else required
+    import inspect
+
+    params = inspect.signature(loop_mod.run_once).parameters
+    assert "client" in params
+    assert [p.name for p in params.values() if p.default is inspect.Parameter.empty] == ["client"]
