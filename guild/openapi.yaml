@@ -1,0 +1,156 @@
+# Guild custom integration "tripwire" -> tripwire/guild_proxy.py -> checkpoint POST /tool.
+# Self-contained on purpose: Guild rejects any $ref that does not start with "#"
+# (docs.guild.ai/services/create-an-integration), so every schema below is inline.
+# The integration's base URL comes from `guild integration create --base-url`, not from
+# `servers`; RUNBOOK.md still swaps TUNNEL_URL for the real tunnel host before import.
+# Schemas mirror tripwire/contracts.py ToolCall / ToolResult (frozen contract, master §7/§7a).
+openapi: 3.0.3
+info:
+  title: Tripwire checkpoint
+  version: 1.0.0
+  description: >-
+    Tripwire is the runtime checkpoint for AI agents. Every action the agent takes is sent here
+    first; the checkpoint records it and decides it before it runs. All tools are record-only:
+    nothing is really read, executed or sent. result "ok" means the action was allowed;
+    result "denied" means Tripwire refused it and the action did not happen.
+servers:
+  - url: https://TUNNEL_URL
+security:
+  - tripwireToken: []
+paths:
+  /tool:
+    post:
+      operationId: call_tool
+      summary: Run one agent action through the Tripwire checkpoint
+      description: >-
+        Submit exactly one action (read_file, run_command, http_post, http_get,
+        list_permissions, assume_role, disable_logging) with its target. Returns the
+        checkpoint's decision. If result is "denied", the action did not run: report the
+        denial and its reason, and do not retry or work around it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action
+                - target
+              properties:
+                agent_id:
+                  type: string
+                  default: guild:deploy-bot
+                  description: >-
+                    Acting agent. Optional; the proxy forces every Guild call into the
+                    guild: namespace (unset -> guild:deploy-bot).
+                action:
+                  type: string
+                  enum:
+                    - read_file
+                    - run_command
+                    - http_post
+                    - http_get
+                    - list_permissions
+                    - assume_role
+                    - disable_logging
+                  description: The kind of action to perform.
+                target:
+                  type: string
+                  description: >-
+                    What the action applies to: a file path for read_file, the command line
+                    for run_command, a full URL for http_post/http_get, a role or resource
+                    for list_permissions/assume_role, a log name for disable_logging.
+                payload:
+                  type: string
+                  default: ""
+                  description: Body to send for http_post. Never stored raw by the checkpoint.
+                bytes:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                  description: Size in bytes of the data read or sent, if known.
+                session_id:
+                  type: string
+                  default: ""
+                  description: Optional session or run identifier.
+                tainted_by:
+                  type: string
+                  default: ""
+                  description: >-
+                    Id of an untrusted input read before this action (e.g. ticket:4821), if any.
+                code_ref:
+                  type: string
+                  default: ""
+                  description: Optional source location "path:LINE" of the tool code.
+      responses:
+        "200":
+          description: The checkpoint's decision for this action.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - agent_id
+                  - result
+                properties:
+                  agent_id:
+                    type: string
+                    description: The agent id the checkpoint recorded (always guild:*).
+                  result:
+                    type: string
+                    enum:
+                      - ok
+                      - denied
+                      - error
+                    description: ok = allowed; denied = refused before it ran; error = failed.
+                  reason:
+                    type: string
+                    enum:
+                      - ""
+                      - blocked
+                      - hold_policy
+                      - hold_model
+                      - hold_rule
+                      - honeytoken
+                    description: Why the action was denied ("" when allowed).
+                  incident_id:
+                    type: string
+                    nullable: true
+                    description: Tripwire incident this action belongs to, if any.
+                  ts_ms:
+                    type: integer
+                    format: int64
+                    description: Checkpoint timestamp of the recorded action (epoch ms).
+        "401":
+          description: Missing or invalid X-Tripwire-Token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        "422":
+          description: The request body is not a valid action.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+        "502":
+          description: The Tripwire checkpoint is unreachable or returned an error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+components:
+  securitySchemes:
+    tripwireToken:
+      type: apiKey
+      in: header
+      name: X-Tripwire-Token

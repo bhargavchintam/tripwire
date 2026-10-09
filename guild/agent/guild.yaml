@@ -1,0 +1,9 @@
+# Guild Native agent tools (docs.guild.ai/guide/guild-yaml).
+# `tools:` is omitted on purpose: that exposes every operation of the integration, which here is
+# only call_tool (tool name tripwire_call_tool). Listing it by name would fail the build if the
+# service prefix differs from our guess.
+# If the tunnel URL ever changes, a NEW integration is needed (URLs freeze at first publish):
+# change `name` below to the new integration (e.g. bindubhargavareddy~tripwire2) and re-save.
+integrations:
+  - name: bindubhargavareddy~tripwire
+    version: ^1.0.0

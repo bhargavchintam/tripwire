@@ -1,0 +1,397 @@
+# Tripwire custom agent-security ruleset (Semgrep CE / OSS).
+#
+# Four agent-specific risk classes that generic packs do not model, written live at the
+# Cyberdefense Hackathon (Oct 9 2026). Each rule has positive (`# ruleid:`) and negative
+# (`# ok:`) fixtures in semgrep/tests/. Run:
+#
+#   semgrep --test --config semgrep/rules/tripwire-agent-security.yaml semgrep/tests
+#   semgrep scan --metrics=off --config semgrep/rules <paths>
+#
+# Every rule is intraprocedural (Semgrep CE taint); FINDINGS.md lists what each one can
+# and cannot see.
+
+rules:
+  # ---------------------------------------------------------------------------------
+  # (a) model output -> code execution / shell
+  # ---------------------------------------------------------------------------------
+  - id: tripwire-llm-output-to-code-exec
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Output of an LLM call reaches a code-execution or shell sink ($SINK). A prompt-injected
+      model can make this run arbitrary code with the agent's privileges. Never execute model
+      output; map it to an allowlisted action (enum/schema) and run fixed argv without a shell.
+    metadata:
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      owasp:
+        - "LLM05:2025 Improper Output Handling"
+        - "LLM06:2025 Excessive Agency"
+      category: security
+      subcategory: [vuln]
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [openai, akashml, llm, agents]
+      references:
+        - https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/
+        - https://genai.owasp.org/llmrisk/llm062025-excessive-agency/
+        - https://cwe.mitre.org/data/definitions/94.html
+    pattern-sources:
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $CLIENT.completions.create(...)
+      - pattern: $CLIENT.responses.create(...)
+      - pattern: $CLIENT.messages.create(...)
+      # Tripwire's own wrapper (ai/llm.py LLM.chat_json -> ChatJSON{obj,text}).
+      - pattern: $LLM.chat_json(...)
+      - pattern: chat_json(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($SINK, ...)
+              - pattern: exec($SINK, ...)
+              - pattern: compile($SINK, ...)
+              - pattern: os.system($SINK)
+              - pattern: os.popen($SINK, ...)
+              - pattern: subprocess.$FN($SINK, ...)
+              - pattern: asyncio.create_subprocess_shell($SINK, ...)
+              - pattern: asyncio.create_subprocess_exec($SINK, ...)
+          - focus-metavariable: $SINK
+
+  - id: tripwire-llm-output-to-code-exec-ts
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Output of an LLM call reaches eval/Function/child_process ($SINK). A prompt-injected model
+      can make this run arbitrary code. Never execute model output.
+    metadata:
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      owasp:
+        - "LLM05:2025 Improper Output Handling"
+      category: security
+      subcategory: [vuln]
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [openai, llm, agents]
+      references:
+        - https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/
+    pattern-sources:
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $CLIENT.responses.create(...)
+      - pattern: $CLIENT.messages.create(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($SINK)
+              - pattern: new Function(..., $SINK)
+              - pattern: $CP.exec($SINK, ...)
+              - pattern: $CP.execSync($SINK, ...)
+              - pattern: $CP.spawn($SINK, ...)
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------------
+  # (b) outbound HTTP to a destination never checked against an allowlist
+  # ---------------------------------------------------------------------------------
+  - id: tripwire-unallowlisted-outbound-http
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Outbound HTTP destination comes from a function parameter, a request body or model output
+      and is sent without an allowlist/host check on this path. An agent steered by injected
+      content can exfiltrate data to any host (the exact chain Tripwire's hold mode stops at
+      runtime). Check host_of(url) against an allowlist (or is_external()) before sending.
+    metadata:
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+        - "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+      owasp:
+        - "LLM06:2025 Excessive Agency"
+        - "LLM02:2025 Sensitive Information Disclosure"
+      category: security
+      subcategory: [audit]
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [httpx, requests, agents]
+      references:
+        - https://genai.owasp.org/llmrisk/llm062025-excessive-agency/
+        - https://cwe.mitre.org/data/definitions/918.html
+    pattern-sources:
+      # Function parameters (not self/cls): the caller -- often an agent loop -- picks the URL.
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $PARAM, ...):
+                ...
+          - focus-metavariable: $PARAM
+          - metavariable-regex:
+              metavariable: $PARAM
+              regex: ^(?!self$|cls$)
+      - pattern: $REQ.json()
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $LLM.chat_json(...)
+    pattern-sanitizers:
+      # Guard calls clean the URL for the rest of the function (by side effect).
+      - by-side-effect: true
+        patterns:
+          - pattern: $GUARD(..., $URL, ...)
+          - metavariable-regex:
+              metavariable: $GUARD
+              regex: (?i)^(\w+\.)*(is_allowed\w*|allowed\w*|\w*allowlist\w*|is_external|is_internal|validate_(url|dest\w*|host)|check_(url|dest\w*|host)|assert_allowed\w*|ensure_allowed\w*)$
+          - focus-metavariable: $URL
+      # `if host_of(url) [not] in ALLOWED: ...` / urlsplit(url).hostname membership checks.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: host_of($URL) in $ALLOWED
+              - pattern: host_of($URL) not in $ALLOWED
+              - pattern: urlsplit($URL).hostname in $ALLOWED
+              - pattern: urlsplit($URL).hostname not in $ALLOWED
+              - pattern: urlparse($URL).hostname in $ALLOWED
+              - pattern: urlparse($URL).hostname not in $ALLOWED
+          - focus-metavariable: $URL
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: httpx.$M($URL, ...)
+              - pattern: requests.$M($URL, ...)
+              - pattern: urllib.request.urlopen($URL, ...)
+              - pattern: urlopen($URL, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          async with httpx.AsyncClient(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.Client(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with requests.Session() as $C:
+                            ...
+                      - pattern-inside: |
+                          $C = httpx.AsyncClient(...)
+                          ...
+                      - pattern-inside: |
+                          $C = httpx.Client(...)
+                          ...
+                      - pattern-inside: |
+                          $C = requests.Session()
+                          ...
+                  - pattern: $C.$M($URL, ...)
+              # Clients stored on the instance (self._client = httpx.AsyncClient(...)).
+              - patterns:
+                  - pattern: self.$ATTR.$M($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $ATTR
+                      regex: (?i).*(client|session|http).*
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(get|post|put|patch|delete|head|options|stream|send)$
+          # Relative paths on a client with a fixed base_url do not choose the host.
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^(?![fbr]?["']/)
+          - focus-metavariable: $URL
+      # .request(method, url, ...): the URL is the second argument.
+      - patterns:
+          - pattern-either:
+              - pattern: httpx.request($METHOD, $URL, ...)
+              - pattern: requests.request($METHOD, $URL, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          async with httpx.AsyncClient(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.Client(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          $C = httpx.AsyncClient(...)
+                          ...
+                  - pattern: $C.request($METHOD, $URL, ...)
+              - patterns:
+                  - pattern: self.$ATTR.request($METHOD, $URL, ...)
+                  - metavariable-regex:
+                      metavariable: $ATTR
+                      regex: (?i).*(client|session|http).*
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^(?![fbr]?["']/)
+          - focus-metavariable: $URL
+
+  - id: tripwire-unallowlisted-outbound-http-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      fetch/axios destination is not a same-origin relative path literal; if any caller can pass
+      an absolute URL, the browser sends this request (and its body) to an arbitrary host.
+      Restrict to relative paths or check the origin against an allowlist.
+    metadata:
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "LLM06:2025 Excessive Agency"
+      category: security
+      subcategory: [audit]
+      confidence: LOW
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [fetch, axios]
+      references:
+        - https://cwe.mitre.org/data/definitions/918.html
+    patterns:
+      - pattern-either:
+          - pattern: fetch($URL, ...)
+          - pattern: axios.$M($URL, ...)
+          - pattern: axios($URL, ...)
+      - pattern-not: fetch("...", ...)
+      - pattern-not: axios.$M("...", ...)
+      - metavariable-regex:
+          metavariable: $URL
+          regex: ^(?!["'`]/)
+      - pattern-not-inside: |
+          if (<... $ALLOWED.includes(...) ...>) { ... }
+      - pattern-not-inside: |
+          if (<... $ALLOWED.has(...) ...>) { ... }
+
+  # ---------------------------------------------------------------------------------
+  # (c) untrusted tool/event content in an LLM prompt outside a delimited data block
+  # ---------------------------------------------------------------------------------
+  - id: tripwire-untrusted-content-in-llm-prompt
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Untrusted tool/event content ($SINK) is placed into an LLM message without going through
+      a delimiting/encoding step (json.dumps or an *_json/fence/escape helper). Text an attacker
+      controls -- a URL host, a command, a ticket body -- then sits next to the instructions,
+      outside the data block the system prompt tells the model to distrust (indirect prompt
+      injection). Put it inside the fenced JSON block instead.
+    metadata:
+      cwe:
+        - "CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')"
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+      owasp:
+        - "LLM01:2025 Prompt Injection"
+      category: security
+      subcategory: [audit]
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [openai, akashml, llm, agents]
+      references:
+        - https://genai.owasp.org/llmrisk/llm01-prompt-injection/
+        - https://cwe.mitre.org/data/definitions/1427.html
+    pattern-sources:
+      # Fields that carry agent/tool-controlled text in Tripwire's contract (ToolCall,
+      # QuickCheckInput, event rows) and in typical agent loops (tool output, observations).
+      - patterns:
+          - pattern: $OBJ.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(target|targets|payload|context|events|tainted_by|output|tool_output|observation|ticket|ticket_body|page_text)$
+      - patterns:
+          - pattern-either:
+              - pattern: $OBJ[$KEY]
+              - pattern: $OBJ.get($KEY, ...)
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: ^["'](target|targets|payload|output|tool_output|observation|ticket|page_text)["']$
+      # Semgrep CE does not propagate taint through slices (x[:500]); re-source a slice whose
+      # base expression contains one of the fields above (e.g. str(inp.context or "")[:500]).
+      - patterns:
+          - pattern-either:
+              - pattern: $BASE[$LO:$HI]
+              - pattern: $BASE[:$HI]
+              - pattern: $BASE[$LO:]
+          - metavariable-pattern:
+              metavariable: $BASE
+              patterns:
+                - pattern: <... $OBJ.$FIELD ...>
+                - metavariable-regex:
+                    metavariable: $FIELD
+                    regex: ^(target|targets|payload|context|events|tainted_by|output|tool_output|observation|ticket|ticket_body|page_text)$
+    pattern-sanitizers:
+      - pattern: json.dumps(...)
+      - patterns:
+          - pattern: $ENC(...)
+          - metavariable-regex:
+              metavariable: $ENC
+              regex: (?i)^(\w+\.)*\w*(json|fence|fenced|delimit\w*|escape\w*|quote\w*|sanitize\w*)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: '{"role": $ROLE, "content": $SINK, ...}'
+              - pattern: 'dict(role=$ROLE, content=$SINK, ...)'
+              - pattern: $CLIENT.responses.create(..., instructions=$SINK, ...)
+              - pattern: $CLIENT.messages.create(..., system=$SINK, ...)
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------------
+  # (d) SQL built by string formatting, sent to a ClickHouse client
+  # ---------------------------------------------------------------------------------
+  - id: tripwire-clickhouse-sql-string-formatting
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >-
+      SQL text built by f-string / .format / % / + interpolation of a non-constant value
+      ($SINK) is sent to a ClickHouse client. If the value can come from an agent, a request or
+      a model, it is SQL injection. Use server-side parameters ({name:Type} + parameters=...),
+      or escape every literal (sql_str/sql_arr) and cast numbers with int().
+    metadata:
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "LLM05:2025 Improper Output Handling"
+      category: security
+      subcategory: [audit]
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [clickhouse, clickhouse-connect]
+      references:
+        - https://clickhouse.com/docs/en/interfaces/cli#cli-queries-with-parameters
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/
+    pattern-sources:
+      # The interpolated value itself is the source, so only *formatted* SQL is reported
+      # (a constant string or server-side parameters never are).
+      - patterns:
+          - pattern-either:
+              - pattern: f"...{$VAL}..."
+              - pattern: '"..." % $VAL'
+              - pattern: '"...".format(..., $VAL, ...)'
+              - pattern: '$TEXT.format(..., $KW=$VAL, ...)'
+              - pattern: '"..." + $VAL'
+              - pattern: '$VAL + "..."'
+          - metavariable-pattern:
+              metavariable: $VAL
+              patterns:
+                # escaped / numeric / constant pieces are safe
+                - pattern-not: '"..."'
+                - pattern-not: sql_str(...)
+                - pattern-not: sql_arr(...)
+                - pattern-not: int(...)
+                - pattern-not: float(...)
+                - pattern-not: bool(...)
+                - pattern-not: len(...)
+                - pattern-not: round(...)
+          - metavariable-regex:
+              # UPPER_CASE constants, escape/quote helpers, and table/database identifiers
+              # configured in code are not reported.
+              metavariable: $VAL
+              regex: ^(?![A-Z][A-Z0-9_]*$)(?!(\w+\.)*(sql_\w+|quote\w*|escape\w*)\()(?!((\w+\.)*(table|table_name|tbl|database|db)$))
+          - focus-metavariable: $VAL
+    pattern-sinks:
+      - patterns:
+          - pattern: $CH.$METHOD($SQL, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|command|query_df|query_np|query_arrow|query_rows|raw_query|raw_stream|query_row_block_stream|query_rows_stream)$
+          - focus-metavariable: $SQL

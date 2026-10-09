@@ -36,7 +36,7 @@ addopts = "-m 'not e2e'"
 
 [tool.ruff]
 line-length = 110
-extend-exclude = ["web", "var", "reports"]
+extend-exclude = ["web", "var", "reports", "semgrep/tests"]  # semgrep/tests = rule-test fixtures (intentionally flagged code, never imported)
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
