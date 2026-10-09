@@ -455,8 +455,9 @@ class Detector:
                 f"within 60 s (first_step_ts_ms={hit.get('first_step_ts_ms')}, "
                 f"last_step_ts_ms={hit.get('last_step_ts_ms')}, n_events={hit.get('n_events')})"
             )
-        targets = ", ".join(str(t) for t in (hit.get("targets") or [hit.get("target")])[:5])
-        return f"Tripwire detector; rule {rule} matched {hit.get('n_rows', 1)} row(s) in the window: {targets}"
+        # Raw targets are agent-chosen text: they reach the model only inside the fenced events JSON
+        # (Semgrep finding #1, LLM01), never through this free-text context.
+        return f"Tripwire detector; rule {rule} matched {hit.get('n_rows', 1)} row(s) in the window"
 
     async def _handle_hit(
         self,

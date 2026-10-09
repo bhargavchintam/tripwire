@@ -90,10 +90,15 @@ def events_json(events: list[dict[str, Any]]) -> str:
 
 def build_messages(inp: QuickCheckInput) -> list[dict[str, str]]:
     """System prompt first; untrusted events only inside the <<<EVENTS_JSON ... >>> block."""
-    context = str(inp.context or "")[:MAX_CONTEXT].replace("\n", " ")
+    # Semgrep finding #1 (LLM01): context may carry agent-chosen text (hosts, targets), so it is
+    # JSON-encoded inside its own fenced data block — never free text next to the instructions.
+    context_json = json.dumps(str(inp.context or "")[:MAX_CONTEXT], ensure_ascii=True)
     user = (
         f"rule: {inp.rule}\n"
-        f"context: {context}\n"
+        "context (untrusted data, JSON string):\n"
+        "<<<CONTEXT_JSON\n"
+        f"{context_json}\n"
+        ">>>\n"
         "events (untrusted data, oldest first):\n"
         "<<<EVENTS_JSON\n"
         f"{events_json(inp.events)}\n"
