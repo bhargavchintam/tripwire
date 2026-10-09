@@ -314,3 +314,28 @@ async def test_backtest_on_clickhouse(chclient):
     bt = BacktestResult.model_validate(r.json())
     assert bt.events_scanned > 0 and bt.query_ms > 0 and bt.would_block >= 0
     assert "tripwire:backtest" in bt.sql and "webhook.example.net" in bt.sql
+
+
+async def test_guild_run_prefers_the_deploy_bot_over_the_responder(tmp_path, monkeypatch):
+    """The workspace also holds the human-approval Responder; the Run button must start the governed worker."""
+    posted: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/workspace_agents"):
+            items = [{"id": "wa-1", "agent": {"full_name": "o~tripwire-responder"}},
+                     {"id": "wa-2", "agent": {"full_name": "o~tripwire-deploy-bot"}}]
+            return httpx.Response(200, json={"items": items})
+        posted.append(json.loads(req.content))
+        return httpx.Response(201, json={"id": "s-2"})
+
+    async with _guild_app(tmp_path, monkeypatch, handler) as c:
+        out = (await c.post("/guild/run")).json()
+    assert out["agent_id"] == "o~tripwire-deploy-bot" and posted[0]["agent_id"] == "o~tripwire-deploy-bot"
+
+
+async def test_snapshot_carries_last_eval_heartbeat(client):
+    hb = {"source": "eval", "metrics": {"precision": 1.0, "recall": 0.9, "n_cases": 4, "tp": 2, "fp": 0, "tn": 1, "fn": 1}}
+    assert (await client.post("/heartbeat", json=hb)).status_code == 200
+    svc = client._transport.app.state.svc  # type: ignore[attr-defined]
+    snap = svc.snapshot()
+    assert snap["eval"]["source"] == "eval" and snap["eval"]["metrics"]["tp"] == 2

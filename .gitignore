@@ -37,3 +37,4 @@ data/*.parquet
 .idea/
 .vscode/
 *.swp
+guild/agent/.guild/

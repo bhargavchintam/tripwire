@@ -1,5 +1,7 @@
-# tripwire-release-bot
+# tripwire-deploy-bot (Guild Native agent)
 
-A Guild Native agent (`PROMPT.md` + `guild.yaml`) that runs routine release checks. Each action goes through the Tripwire checkpoint via the `bindubhargavareddy~tripwire` custom integration. Tripwire records the call and decides it before it runs, and the agent shows up in Tripwire as `guild:deploy-bot`. All tools are record-only.
-
-Deploy steps: `../RUNBOOK.md`.
+Published to `bindubhargavareddy~tripwire-deploy-bot` and installed in workspace `bindubhargavareddy~tripwire`.
+Its only tool is the `tripwire` integration (`POST /tool` through a cloudflared tunnel to
+`tripwire/guild_proxy.py`, which forces the `guild:` agent id and forwards to the checkpoint).
+Every action it takes is recorded in ClickHouse and decided by Tripwire before it runs; tools are record-only.
+Trigger it with `POST /guild/run` on the checkpoint (or the Sponsors tab button). Setup: `guild/RUNBOOK.md`.

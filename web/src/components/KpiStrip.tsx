@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 import { Card } from "./ui/card";
 import { Tooltip } from "./ui/tooltip";
 import { DASH, isNum } from "../lib/format";
-import { useEvidence } from "../hooks/useTripwire";
+import { useEvidence, useTripwire } from "../hooks/useTripwire";
+
+const SPARK_POINTS = 60;
 
 function Num({ v, digits = 0, suffix }: { v: number | null | undefined; digits?: number; suffix?: string }) {
   if (!isNum(v)) return <span className="text-dim">{DASH}</span>;
@@ -18,16 +20,46 @@ function Num({ v, digits = 0, suffix }: { v: number | null | undefined; digits?:
   );
 }
 
+/** Raw detector query timings from the live stream (no axes). Renders nothing below 2 samples. */
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const pts = values
+    .map((v, i) => `${(i / (values.length - 1)) * 100},${hi > lo ? 19 - ((v - lo) / (hi - lo)) * 18 : 10}`)
+    .join(" ");
+  return (
+    <svg
+      viewBox="0 0 100 20"
+      preserveAspectRatio="none"
+      className="mt-1 h-5 w-full"
+      role="img"
+      aria-label={`last ${values.length} detection query timings`}
+    >
+      <polyline
+        points={pts}
+        fill="none"
+        className="stroke-model"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
 function Tile({
   icon,
   label,
   children,
   source,
+  footer,
 }: {
   icon: ReactNode;
   label: string;
   children: ReactNode;
   source: string;
+  footer?: ReactNode;
 }) {
   return (
     <Tooltip content={<span>Source: {source}</span>}>
@@ -37,21 +69,28 @@ function Tile({
           {label}
         </div>
         <div className="font-mono text-2xl font-bold tabular-nums leading-tight text-fg">{children}</div>
+        {footer}
       </Card>
     </Tooltip>
   );
 }
 
-/** Six numbers, all straight from GET /evidence. Null renders "—". */
+/** Six numbers, all straight from GET /evidence. Null renders "—". The latency sparkline is the raw stream. */
 export function KpiStrip() {
   const { data: ev, isError } = useEvidence();
+  const { state } = useTripwire();
   const e = isError ? undefined : ev;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
       <Tile icon={<Database />} label="Events stored" source="/evidence events_stored (ClickHouse count, includes synthetic background rows)">
         <Num v={e?.events_stored} />
       </Tile>
-      <Tile icon={<Gauge />} label="Detection p50 / p95" source="/evidence query_p50_ms / query_p95_ms">
+      <Tile
+        icon={<Gauge />}
+        label="Detection p50 / p95"
+        source={`/evidence query_p50_ms / query_p95_ms; line: last ${SPARK_POINTS} detector query timings on the live stream`}
+        footer={<Sparkline values={state.queryTimings.slice(-SPARK_POINTS)} />}
+      >
         <Num v={e?.query_p50_ms} digits={1} />
         <span className="text-dim"> / </span>
         <Num v={e?.query_p95_ms} digits={1} />

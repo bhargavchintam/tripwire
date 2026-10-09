@@ -49,7 +49,7 @@ _DEFAULT = object()
 REPLAY_BLOCK_WAIT_S = 10.0
 REPLAYS_MAX = 50
 # Agent-id prefixes used by tests / sandboxed verification; a full demo reset forgets them.
-TEST_AGENT_PREFIXES = ("acc-", "e2e-", "test-", "verify:")
+TEST_AGENT_PREFIXES = ("acc-", "e2e-", "test-", "verify:", "guild:integration-test")
 _SCENARIO_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
@@ -549,6 +549,7 @@ class Checkpoint:
             "alerts": list(st.recent_alerts),  # newest first
             "hold_enabled": st.hold_enabled,
             "policy": st.policy.model_dump(),
+            "eval": st.heartbeats.get("eval"),  # last eval-runner heartbeat (confusion matrix on reload)
         }
 
     # ------------------------------------------------------------------ misc mutations

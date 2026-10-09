@@ -49,11 +49,18 @@ export interface TripwireState {
   approvedIds: string[]; // incidents whose guardrail was approved this session
   modelIds: string[]; // distinct verdict model ids seen on the stream
   lastBacktest: BacktestResult | null;
+  // Raw per-query detector timings (ms) seen on the stream since the last snapshot, oldest first, capped.
+  // Same values the checkpoint pools into /evidence query_p50_ms / query_p95_ms; cleared on snapshot (reset).
+  queryTimings: number[];
+  // Last eval-runner heartbeat ({source:'eval', metrics, received_ms}). Kept across snapshots, like /evidence.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  evalHeartbeat: Record<string, any> | null;
   lastSeq: number;
 }
 
 const MAX_EVENTS = 200;
 const MAX_ALERTS = 50;
+const MAX_TIMINGS = 500;
 
 export const initialState: TripwireState = {
   connection: "connecting",
@@ -75,8 +82,16 @@ export const initialState: TripwireState = {
   approvedIds: [],
   modelIds: [],
   lastBacktest: null,
+  queryTimings: [],
+  evalHeartbeat: null,
   lastSeq: 0,
 };
+
+/** Finite, non-negative values of a heartbeat's query_timings_ms (the checkpoint keeps the same ones). */
+function timingValues(t: unknown): number[] {
+  if (!t || typeof t !== "object") return [];
+  return Object.values(t as Record<string, unknown>).filter((v): v is number => isNum(v) && v >= 0);
+}
 
 /** Live agents only: synthetic background agents are named agent-NN; guardrail replays run as verify:*. */
 export const isLiveAgent = (id: string | undefined): id is string =>
@@ -184,6 +199,9 @@ function applySnapshot(state: TripwireState, d: Record<string, any>, ts: number)
     alerts: (d.alerts ?? []).slice(0, MAX_ALERTS),
     outbreak,
     metrics: d.metrics ?? null,
+    queryTimings: [],
+    // The checkpoint snapshot carries the last eval heartbeat, so the confusion matrix survives a reload.
+    evalHeartbeat: d.eval?.source === "eval" ? d.eval : state.evalHeartbeat,
     quarantineOrder: Object.entries(modes)
       .filter(([, m]) => m === "quarantined")
       .map(([a]) => a),
@@ -281,7 +299,15 @@ function reducer(state: TripwireState, action: Action): TripwireState {
       // The checkpoint also sends config changes as metrics ({source:'checkpoint', kind:'hold'|'policy'});
       // those update the flags above but must not replace the last heartbeat payload.
       const isConfig = d.source === "checkpoint" && typeof d.kind === "string";
-      return { ...base, metrics: isConfig ? base.metrics : d, holdEnabled: hold, policyVersion };
+      const timings = d.source === "detector" ? timingValues(d.query_timings_ms) : [];
+      return {
+        ...base,
+        metrics: isConfig ? base.metrics : d,
+        holdEnabled: hold,
+        policyVersion,
+        queryTimings: timings.length ? [...base.queryTimings, ...timings].slice(-MAX_TIMINGS) : base.queryTimings,
+        evalHeartbeat: d.source === "eval" ? d : base.evalHeartbeat,
+      };
     }
 
     case "quorum": {

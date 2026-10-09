@@ -8,6 +8,14 @@ Who runs each step:
 - **[CLAUDE]** can be pasted into a Claude session.
 - **[CLAUDE, OK first]** means Claude should ask before running it, because it installs something or creates something in Guild.
 
+## Current state (13:10 PT) — DONE, keep it running
+
+- Integration `bindubhargavareddy~tripwire` v1.0.0 **published** (operation `tool` → tool name `tripwire_tool`), base URL = the quick tunnel in `var/run/tunnel_url` (frozen). Credential = `~/.tripwire-guild-proxy-token`.
+- Agent `bindubhargavareddy~tripwire-deploy-bot` (Native, the one created in the UI) **re-published** from `guild/agent/` with the integration attached; `/guild/run` now prefers it over `tripwire-responder`.
+- Verified 12:56: Guild version test 200; `/guild/run` → the agent made `read_file`, `run_command`, internal `http_post` (all `ok`, as `guild:deploy-bot`); a prompted external post was **denied by hold mode** (`hold_model`).
+- Running in the background (logs in `var/run/`): checkpoint :8000, detector, `guild_proxy` :8010, `cloudflared` (quick tunnel). **Do not restart cloudflared** — a new URL needs a new integration (`tripwire2`, steps 5–9 below, ~6 min). Restarting the checkpoint or the proxy is fine.
+- The steps below are kept as the record of how it was set up (operation is `tool`, not `call_tool`).
+
 ## What we're building (fastest path the docs support)
 
 ```

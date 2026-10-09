@@ -375,7 +375,9 @@ def create_app(
                             status_code=409,
                             content={"detail": "no agent installed in the Guild workspace yet", "agents_status": ra.status_code},
                         )
-                    agent_id = (items[0].get("agent") or {}).get("full_name") or items[0].get("id")
+                    # Prefer the governed worker (…~tripwire-deploy-bot) over e.g. the Responder; else the first one.
+                    names = [(it.get("agent") or {}).get("full_name") or it.get("id") for it in items]
+                    agent_id = next((n for n in names if n and n.endswith("deploy-bot")), names[0])
                 r = await c.post(
                     url, auth=basic, json={"session_type": "chat", "agent_id": agent_id, "initial_prompt": prompt}
                 )

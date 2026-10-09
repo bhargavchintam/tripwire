@@ -20,7 +20,7 @@ security:
 paths:
   /tool:
     post:
-      operationId: call_tool
+      operationId: tool
       summary: Run one agent action through the Tripwire checkpoint
       description: >-
         Submit exactly one action (read_file, run_command, http_post, http_get,

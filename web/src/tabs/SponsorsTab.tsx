@@ -104,10 +104,11 @@ export function SponsorsTab() {
       <Sponsor
         icon={<Bug className="text-bad" />}
         name="Semgrep"
-        role="Semgrep scans the AI-written code with a custom agent-security ruleset; runtime events carry code_ref (file:line) so a denial can link back to code."
+        role="Semgrep scans our own AI-written code with 6 custom agent-security rules plus registry packs; every finding is triaged, and the real one (untrusted text reaching our verdict model, OWASP LLM01) is fixed on the hold path. Runtime events carry code_ref (file:line) so a denial links back to code."
         proof={
           <>
-            <span>scan results: semgrep/FINDINGS.md in the repo</span>
+            <span>135 files · 12 findings triaged · 1 true positive</span>
+            <span className="text-muted">receipt: semgrep/FINDINGS.md, out/scan.json</span>
             <span className="text-muted">last code_ref: {lastCodeRef ?? DASH}</span>
           </>
         }
