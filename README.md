@@ -51,8 +51,8 @@ AI agents now hold production keys: they read config, run commands and call exte
 | Sponsor | What runs today | Status |
 |---|---|---|
 | **ClickHouse** | ClickHouse Cloud stores every tool call in `tripwire.events`: a MergeTree ordered by `(agent_id, ts)` with a bloom-filter index on `target`. ClickHouse also does four jobs in the request path and the console. (1) Hold mode looks up the agent's history to spot a destination it has never used (800 ms budget). (2) A policy backtest scans the **full** table. (3) The fleet heatmap aggregates per agent per hour. (4) `/audit/verify` checks the per-agent hash chain. Reads see their own writes across the 2 replicas. | built |
-| | The detector runs `windowFunnel` in milliseconds over the stream every 1 s. | WIP |
-| **AkashML / Akash** | Models are chosen and timed on AkashML (see results). Hold mode already calls `classify()` with a 3 s timeout. Until the AkashML-backed version lands, a built-in rule makes the call, and its verdicts are labelled `decision_source=rule_only`. Still to come: the two-model quorum and the AkashML-vs-OpenAI cost per 1,000 events. | WIP |
+| | The detector runs a millisecond `windowFunnel` (plus baseline, role-grab and log-tamper rules) over the live stream every 1 s and posts `/block` when the attack sequence appears — the hold-off containment path. | built |
+| **AkashML / Akash** | `classify()` runs on AkashML (`meta-llama/Llama-3.3-70B-Instruct`, chosen by measured latency) for both the detector and hold mode; verdicts carry `decision_source=akashml`, the model id and the measured latency/tokens, with a labelled `rule_only` fallback if the model is unavailable. Still to come: the two-model quorum (second family `openai/gpt-oss-120b`) and the AkashML-vs-OpenAI cost per 1,000 events. | built / WIP |
 | **Guild** | `POST /guild/run` starts a session for the agent installed in workspace `bindubhargavareddy~tripwire`, following docs.guild.ai: a chat session with an account key, falling back to `api_trigger`, and it returns `session_url`. The workspace exists, but the worker agent is not published yet. The Guild "Responder" with a human approval step is also not built yet. | WIP |
 | **Semgrep** | Planned: a custom agent-security ruleset plus `semgrep/FINDINGS.md` (real findings only), with runtime events linked to source code via `code_ref`. Nothing is committed yet. | WIP |
 | **Pi (Most Innovative)** | One loop: **prevent → trip → trace → cure-with-proof**. Hold-before-run, honeytokens, quarantine and the proven cure are built in the checkpoint. Outbreak detection is in progress. | built / WIP |
@@ -78,7 +78,8 @@ Every number here comes from a receipt. Synthetic background data is labelled `s
 | Fleet heatmap | 42 agents / 29.5M rows in **421 ms** | local Docker | commit `e464e22` |
 | Fleet heatmap, 72 h | 42 agents / 29,674,435 rows, median **1,479 ms** (3 runs) | ClickHouse Cloud | `checkpoint/fleet.heatmap`, 18:22 UTC |
 | AkashML JSON verdict, 1 sample each | Llama-3.3-70B 1.2 s · gpt-oss-120b 1.2 s · gpt-oss-20b 4.9 s (over the 3 s hold budget) | AkashML API | `status/bindu.md` (stamped 11:25) |
-| Tests | `make check` **82 passed** (73 unit + 9 integration, local ClickHouse); e2e **13 passed, 3 skipped** on real ClickHouse — the 3 skips are the detector (hold-off) path, pending its merge | laptop | `make check` at `68a8e8b`; `pytest -m e2e` incl. the core-gate acceptance suite run ×3 |
+| Tests | `make check` **152 passed** (both tracks, local ClickHouse) | laptop | `make check` at `eff542a` |
+| Core-gate acceptance (master §12, each run ×3, both containment paths: hold mode + detector) | **16/16 passed** on local + deterministic rule · **16/16** on local + real AkashML · **16/16 on ClickHouse Cloud + real AkashML** (115 s), 0 test rows left behind | laptop → local / Cloud | `make e2e`, `make e2e-cloud` at `eff542a`, 11:55 |
 | Precision / recall, time-to-detect (hold OFF), AkashML vs OpenAI cost per 1k events | — | — | to be measured (`/evidence`) |
 
 The live values are always at `GET /evidence` and on the console's Evidence tab.
