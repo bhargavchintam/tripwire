@@ -595,6 +595,10 @@ class Checkpoint:
     def outbreak(self, incident_id: str, o: Outbreak) -> dict[str, Any]:
         st = self.state
         inc = self.get_incident(incident_id)
+        if inc.closed_ms is not None:
+            # A late trace (e.g. arriving after /demo/reset or a restore) must not re-add the attacker host
+            # to a fresh policy or put agents on watch for an incident that is already over.
+            raise Conflict("incident is closed; outbreak not applied", incident_id=incident_id)
         inc.outbreak = o
         heightened: list[str] = []
         for a in o.exposed_agents:

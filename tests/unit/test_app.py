@@ -508,3 +508,18 @@ async def test_demo_reset_full_drops_test_agent_incidents_keeps_fleet_history(cl
     await client.post("/demo/reset?full=1")
     agents = {i["agent_id"] for i in (await client.get("/incidents")).json()}
     assert "e2e-sweep" not in agents and "eval-bot" not in agents and "deploy-bot" in agents
+
+
+async def test_late_outbreak_for_a_closed_incident_changes_nothing(client, svc):
+    """Rehearsal bug 14:51: the tracer's outbreak POST for a warm-up incident arrived after /demo/reset and
+    re-added the attacker host to the fresh policy. Outbreaks only apply to OPEN incidents."""
+    now = int(time.time() * 1000)
+    blk = {"rule": "hold", "verdict": "malicious", "confidence": 0.9, "reason": "t", "decision_source": "akashml",
+           "detected_at_ms": now, "last_step_ts_ms": now}
+    inc = (await client.post("/block/deploy-bot", json=blk)).json()["incident_id"]
+    await client.post("/demo/reset?full=1")
+    ob = {"source_id": "ticket:4821", "exposed_agents": ["support-bot"], "blocked_destinations": ["drop.example.net"]}
+    r = await client.post(f"/incidents/{inc}/outbreak", json=ob)
+    assert r.status_code == 409
+    assert (await client.get("/policy")).json()["denylist"] == []
+    assert (await client.get("/status")).json()["modes"].get("support-bot", "normal") == "normal"
