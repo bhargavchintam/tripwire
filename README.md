@@ -2,7 +2,9 @@
 
 AI agents now hold production keys: they read config, run commands and call external APIs, and a single poisoned ticket can turn one into an attacker. Logs and dashboards only show this after the secret is gone. Tripwire sits in front of every tool call. It holds and denies a risky action *before* it runs, trips on decoy secrets, traces the poisoned input across the fleet, and cures the fleet with a guardrail that is proven by replay and a backtest over the full fleet history in ClickHouse before a human approves it.
 
-> Built live at the Cyberdefense Hackathon (#SFTechWeek, AWS Builder Loft SF, Oct 9 2026) by a two-person team using Claude Code. Status markers: **[built]** works in the code today · **[WIP]** in progress.
+> Built live at the Cyberdefense Hackathon (#SFTechWeek, AWS Builder Loft SF, Oct 9 2026) by **Bindu** and **Sripadha** using Claude Code. Status markers: **[built]** works in the code today · **[WIP]** in progress.
+>
+> **Demo video:** _link to be added_ · **Repo:** https://github.com/bhargavchintam/tripwire
 
 ---
 
@@ -10,9 +12,9 @@ AI agents now hold production keys: they read config, run commands and call exte
 
 1. **Prevent [built]:** we replay a recorded attack (`fixtures/secret_theft.json`: read ticket → read `/app/.env` → grep the secrets → `http_post` to `drop.example.net`) with hold mode on. The send is **held and denied before it runs**: AkashML judges it malicious (`reason=hold_model`, `decision_source=akashml`, ~1.3–1.8 s), and the agent is quarantined. With no model available the same hold falls back to a labelled rule (`hold_rule`, `rule_only`). Its next action returns `denied`.
 2. **Trip [built]:** in the `honeytoken_exfil` replay, the agent base64-encodes a fake `.env` that holds decoy credentials. The checkpoint scans the outbound payload (raw and base64) and denies the send at once, with no model call.
-3. **Trace [checkpoint side built, outbreak detector WIP]:** patient zero is the untrusted input (`tainted_by`). `POST /incidents/{id}/outbreak` puts the other exposed agents into *heightened* mode and pushes the attacker host to a fleet-wide denylist. The detector that computes the outbreak is in progress.
+3. **Trace [built]:** after every block the detector traces patient zero, the untrusted input in the incident's steps (`tainted_by`), and queries ClickHouse for every other agent that read it (`detection/outbreak.py`, `detection/sql/outbreak_*.sql`). `POST /incidents/{id}/outbreak` puts those agents on *heightened* watch, so their next risky send is **held even with global hold off**, and pushes the attacker's host to a fleet-wide denylist. Replay `poisoned_ticket` (hold OFF), rehearsed 14:49: detect 768 ms → contain 1,531 ms → trace (source `ticket:4821`, exposed `[support-bot]`, 1,054 ms of queries) → support-bot's next external send denied `hold_model`. An **investigator** (`ai/investigator.py`, read-only ClickHouse user + sqlglot allowlist, `LIMIT ≤ 200`) then writes the incident report with its SQL receipts (6 receipts, within 15 s in the same rehearsal).
 4. **Cure with proof [built]:** a candidate guardrail has to pass four gates: `replay_refused` (the incident replayed in an isolated sandbox is denied), `normal_ops_ok` (normal ops are all still allowed), `backtest` (one query over the whole `events` table on ClickHouse Cloud) and `policy_lint`. Only then can a human click **Approve**. The policy version goes up by one, the agent is restored, and the attacker host stays denylisted fleet-wide.
-5. **Numbers [built / WIP]:** the Evidence tab shows hold latency, backtest time and rows scanned, the audit-chain check and the row count, each with its receipt (query ms + rows read). Precision/recall and AkashML-vs-OpenAI cost are WIP (to be measured).
+5. **Numbers [built]:** the Evidence tab shows hold latency, detect/contain times, backtest time and rows scanned, the audit-chain check and the row count, each with its receipt (query ms + rows read), plus the measured eval: precision, strict and prevention recall, the confusion matrix and AkashML-vs-OpenAI cost per 1,000 events (see *Evaluation* below).
 
 ### Screenshots (live console, ClickHouse Cloud + AkashML, Oct 9 ~13:10 PT)
 
@@ -35,8 +37,9 @@ AI agents now hold production keys: they read config, run commands and call exte
                                                                   │  ▲
                                                      writes + SQL ▼  │
                                          ClickHouse Cloud [built]: tripwire.events (~30M rows)
- detector [built]    funnel + baseline SQL every 1 s ─▶ POST /block, /alerts   (outbreak tracing: WIP)
- investigator [WIP]  read-only CH user    ─▶ PUT /incidents/{id}/report
+ detector [built]    funnel + baseline SQL every 1 s ─▶ POST /block, /alerts, /incidents/{id}/outbreak
+ investigator [built] read-only CH user   ─▶ PUT /incidents/{id}/report (+ SQL receipts)
+ eval runner [built]  60 labelled cases   ─▶ POST /heartbeat (source eval) ─▶ /evidence
  classify() on AkashML [built] ◀─ called by hold mode and the detector (labelled rule_only fallback)
 ```
 
@@ -48,9 +51,9 @@ AI agents now hold production keys: they read config, run commands and call exte
 | Replay scenarios | `fixtures/*.json` + `POST /demo/replay` | inside the checkpoint | built |
 | Proven cure / backtest / heatmap | `checkpoint/guardrail.py`, `checkpoint/fleet.py` | checkpoint → ClickHouse Cloud | built |
 | Simulated agents (record-only tools) | `agents/` | laptop | built |
-| Detector (ms `windowFunnel`, baseline novelty, watermarks) | `detection/` | laptop, polls every 1 s | built (outbreak WIP) |
+| Detector (ms `windowFunnel`, secret_exfil_direct, role_grab, log_tamper, baseline novelty, watermarks) + outbreak tracer | `detection/` | laptop, polls every 1 s | built |
 | Quick check on AkashML | `ai/quick_check.py` | AkashML API | built |
-| Investigator, eval runner | `ai/`, `eval/` | AkashML API | WIP |
+| Investigator + SQL guard, two-model quorum (opt-in `--quorum`, not enabled in the demo), eval runner + live pricing | `ai/investigator.py`, `ai/sqlguard.py`, `ai/quorum.py`, `eval/` | AkashML API | built |
 | Guild-hosted agent + integration + proxy | `guild/agent/`, `guild/openapi.yaml`, `tripwire/guild_proxy.py` | Guild workspace `bindubhargavareddy~tripwire` → cloudflared tunnel → `127.0.0.1:8010` | built |
 | Agent-security ruleset + triaged findings | `semgrep/rules/`, `semgrep/FINDINGS.md` | Semgrep CE 1.180.0 | built |
 
@@ -62,10 +65,10 @@ AI agents now hold production keys: they read config, run commands and call exte
 |---|---|---|
 | **ClickHouse** | ClickHouse Cloud stores every tool call in `tripwire.events`: a MergeTree ordered by `(agent_id, ts)` with a bloom-filter index on `target`. ClickHouse also does four jobs in the request path and the console. (1) Hold mode looks up the agent's history to spot a destination it has never used (800 ms budget). (2) A policy backtest scans the **full** table. (3) The fleet heatmap aggregates per agent per hour. (4) `/audit/verify` checks the per-agent hash chain. Reads see their own writes across the 2 replicas. | built |
 | | The detector runs a millisecond `windowFunnel` (plus baseline, role-grab and log-tamper rules) over the live stream every 1 s and posts `/block` when the attack sequence appears — the hold-off containment path. | built |
-| **AkashML / Akash** | `classify()` runs on AkashML (`meta-llama/Llama-3.3-70B-Instruct`, chosen by measured latency) for both the detector and hold mode; verdicts carry `decision_source=akashml`, the model id and the measured latency/tokens, with a labelled `rule_only` fallback if the model is unavailable. Still to come: the two-model quorum (second family `openai/gpt-oss-120b`) and the AkashML-vs-OpenAI cost per 1,000 events. | built / WIP |
+| **AkashML / Akash** | `classify()` runs on AkashML (`meta-llama/Llama-3.3-70B-Instruct`, chosen by measured latency) for both the detector and hold mode; verdicts carry `decision_source=akashml`, the model id and the measured latency/tokens, with a labelled `rule_only` fallback if the model is unavailable. The investigator writes incident reports with `openai/gpt-oss-120b` on AkashML (Llama fallback). A two-model quorum (Llama + gpt-oss, both on AkashML; `decision_source=quorum` only when both agree) is built and opt-in; Sripadha measured it at 1.8–2.4 s, and we keep it off in the demo. **Measured cost** (eval, 14:46): AkashML $0.0382 vs OpenAI gpt-4o-mini $0.0309 per 1,000 events. OpenAI is slightly cheaper at these list prices; we don't claim otherwise. About 1 in 5 quick checks (12 of 60 in the eval) hit the 2.5 s model budget and fell back to the labelled `rule_only`. | built |
 | **Guild** | A Guild **Native agent** (`bindubhargavareddy~tripwire-deploy-bot`) runs in workspace `bindubhargavareddy~tripwire`. Its only tool is our Guild **integration** `bindubhargavareddy~tripwire` (`POST /tool`), which reaches `tripwire/guild_proxy.py` through a cloudflared tunnel; the proxy is token-gated, exposes nothing but `/tool`, and forces the `guild:` agent id. So every action the Guild agent takes is recorded and decided by Tripwire like any other agent's: verified 12:56 PT — `read_file`, `run_command`, internal `http_post` allowed; when we *prompted* it to also post to an external host, hold mode denied the send (`hold_model`, AkashML). `POST /guild/run` (Sponsors tab button) starts the session. The cure panel's **Ask a human in Guild** button starts the Guild Responder agent (`…~tripwire-responder`) with the real incident and proof; it drafts the case and pauses on Guild's `ui_prompt` until a person replies APPROVE/REJECT in the Guild session (verified 13:07). Applying the cure stays a click in Tripwire, which does not read Guild's answer automatically. | built |
 | **Semgrep** | 6 custom agent-security rules (`semgrep/rules/`, OWASP LLM 2025 tags; LLM output → exec, unallowlisted egress, untrusted text in prompts, SQL formatting; 6/6 rule tests) plus `p/python`, `p/secrets`, `p/typescript` over our own AI-written code: re-scan 13:58 PT, 223 files, **13 findings, every one triaged** in `semgrep/FINDINGS.md` — **0 open true positives**. The one real finding (agent-chosen text reaching our verdict model outside the untrusted-data fence, LLM01) was **fixed in both places** (hold path `b1d89b8`, prompt builder + detector `991aed2`) and is no longer reported. Events carry `code_ref` (file:line) for the runtime→code link. | built |
-| **Pi (Most Innovative)** | One loop: **prevent → trip → trace → cure-with-proof**. Hold-before-run, honeytokens, quarantine and the proven cure are built in the checkpoint. Outbreak detection is in progress. | built / WIP |
+| **Pi (Most Innovative)** | One loop: **prevent → trip → trace → cure-with-proof**. Hold-before-run, honeytokens, quarantine, outbreak tracing (exposed agents held on their next risky send), the self-written incident report with SQL receipts, and the proven cure with a Guild human-approval step. | built |
 
 ---
 
@@ -93,9 +96,16 @@ Every number here comes from a receipt. Synthetic background data is labelled `s
 | Core-gate acceptance (master §12, each run ×3, both containment paths: hold mode + detector) | **16/16 passed** on local + deterministic rule · **16/16** on local + real AkashML · **16/16 on ClickHouse Cloud + real AkashML** (115 s), 0 test rows left behind | laptop → local / Cloud | `make e2e`, `make e2e-cloud` at `eff542a`, 11:55 |
 | Live re-verification of every endpoint (demo flow) | **50/50** checks as expected; backtest **30,000,634 events in 784 ms**; audit chain intact (80 events) | ClickHouse Cloud + AkashML | sweep, 12:35–12:45 |
 | Guild-hosted agent through Tripwire | 3 governed tool calls allowed (`guild:deploy-bot`); prompted external post **denied by hold mode** | Guild → tunnel → proxy → checkpoint | proxy log, 12:56 |
-| Precision / recall, AkashML vs OpenAI cost per 1k events | — | — | to be measured (`/evidence`) |
+| **Eval: 60 labelled cases** (30 attack, 30 tricky-benign), live detector rules | **TP 30 · FP 0 · FN 0 · TN 30 → precision 1.000, strict recall (quarantined) 1.000, prevention recall 1.000**; contained by detector 26 + honeytoken 4; median detect 1,116 ms; 48 of 60 quick checks decided by AkashML, 12 `rule_only` | private checkpoint instance (same code + ClickHouse Cloud), hold OFF, 14:40–14:46 | `docs/eval/eval_20261009T214605Z.{md,json}` |
+| Eval cost per 1,000 events | **AkashML $0.0382** (Llama-3.3-70B) vs **OpenAI $0.0309** (gpt-4o-mini): OpenAI slightly cheaper | prices read live 2026-10-09 (AkashML `/v1/models`, OpenAI pricing page) | same report |
+| Act 3 rehearsal (poisoned_ticket, hold OFF) | detect 768 ms · contain 1,531 ms · trace 1,054 ms (source `ticket:4821`, exposed `[support-bot]`) · exposed agent's next external send denied `hold_model` · report with 6 SQL receipts < 15 s | demo stack, ClickHouse Cloud + AkashML | live run 14:49, `status/bindu.md` |
 
 The live values are always at `GET /evidence` and on the console's Evidence tab.
+
+### Evaluation, read honestly
+- **Not a held-out score.** The 60 cases were written for this project and were used to diagnose the detector's misses. With the default `secret_theft,baseline_novelty` rules Sripadha measured strict recall 0.500 and prevention recall 0.733. The demo detector runs the wider rule set (`secret_theft, secret_exfil_direct, role_grab, log_tamper, baseline_novelty`), and the numbers above are for that set.
+- **Strict recall** counts an attack as caught only when the agent is quarantined; **prevention recall** also counts attacks whose harmful action was denied (policy, hold or honeytoken) without quarantine. Both were 30/30 in this run.
+- **A first run at 14:34 was discarded:** another client toggled global hold mode on the shared demo checkpoint mid-run, so 16 cases were stopped by hold mode instead of the detector. The kept run used a private checkpoint instance with nobody else connected.
 
 ---
 
@@ -143,6 +153,6 @@ Other scenarios: `POST /demo/replay {"scenario": "honeytoken_exfil" | "normal_op
 ## Team
 
 - **Bindu**: Platform & Experience (checkpoint, ClickHouse, live console, Guild, Semgrep)
-- **Sripadha**: Agents & Intelligence (agents, detection, AkashML)
+- **Sripadha**: Agents & Intelligence (agents, detection + outbreak tracing, AkashML quick check, quorum, investigator, eval)
 
 The full build plan and frozen contract are in [`00_MASTER_PLAN.md`](00_MASTER_PLAN.md). The original team playbook README is in [`docs/PLAYBOOK_README.md`](docs/PLAYBOOK_README.md).
