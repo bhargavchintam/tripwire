@@ -77,6 +77,8 @@ semgrep/              rules/*.yaml  FINDINGS.md
 tests/unit/test_quorum.py  test_sqlguard.py  test_outbreak.py  tests/integration/test_funnel.py  tests/fakes/fake_llm.py
 ```
 
+> **12:20 rebalance (agreed by both):** `semgrep/` and `guild/` + `tripwire/guild_proxy.py` move from Sripadha to **Bindu**. Sripadha's priorities for the 2:30 gate: (1) detector sends `latency_ms/tokens_in/tokens_out` in AlertPayload, (2) S3 outbreak (`detection/outbreak.py` + a fixture where support-bot reads `ticket:4821`), (3) D6 eval runner + ~60 cases + AkashML-vs-OpenAI cost, (4) D2 investigator (predefined read-only queries, no run_sql). D1 quorum and D8 copilot are cut unless time remains.
+
 ### Shared — Bindu owns the file, FROZEN after 9:45, change only via a CONTRACT CHANGE REQUEST
 ```
 tripwire/contracts.py   data/schema.sql   .env.example   requirements.txt
