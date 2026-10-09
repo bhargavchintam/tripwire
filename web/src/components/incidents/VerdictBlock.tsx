@@ -30,7 +30,7 @@ function ModelChips({ inc, votes }: { inc: Incident; votes?: QuorumVote[] }) {
   return (
     <div className="mt-3 flex flex-wrap gap-1.5">
       {list.map((v) => (
-        <Tooltip key={v.model_id} content={`Model ${v.model_id} voted ${v.verdict ?? "—"}`}>
+        <Tooltip key={v.model_id} content={byId.has(v.model_id) ? `Model ${v.model_id} voted ${v.verdict ?? "—"}` : `Model ${v.model_id} · incident verdict: ${v.verdict ?? "—"}`}>
           <Chip tone="model" mono size="md" icon={<Brain strokeWidth={1.75} />} className="h-auto min-h-7 max-w-full py-1">
             <span className="truncate">{v.model_id}</span>
             {v.verdict ? (

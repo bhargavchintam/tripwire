@@ -151,7 +151,7 @@ export function AgentCard({
   const quarantined = mode === "quarantined";
   const tone = MODE_TONE[mode];
   const guild = agentId.startsWith("guild:");
-  const restoreVisible = quarantined || presenter;
+  const restoreVisible = mode !== "normal" || presenter;
   // Same object when the agent's latest call is the denial (the reducer stores one event in both).
   const lastIsDenial = !!last && last === lastDenied;
   // X restores the MOST RECENTLY quarantined agent: only that card shows the X hint.

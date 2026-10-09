@@ -181,18 +181,7 @@ export function KpiStrip() {
         source={<>/evidence hold_decision_ms ({exact(e?.hold_decision_ms)})</>}
         tone="held"
         measured={isNum(hold.value)}
-        caption={
-          state.holdEnabled === null ? (
-            "Median wait for a verdict"
-          ) : (
-            <span>
-              Median wait · hold{" "}
-              <span className={state.holdEnabled ? "font-medium text-held" : "font-medium text-fg"}>
-                {state.holdEnabled ? "ON" : "OFF"}
-              </span>
-            </span>
-          )
-        }
+        caption="Median wait for a verdict (all held sends this take)"
       >
         {value(
           <InkMarker tone="held" trigger={hold.value} active={isNum(hold.value)} strength={40}>

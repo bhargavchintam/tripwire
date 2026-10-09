@@ -16,14 +16,14 @@ AI agents now hold production keys: they read config, run commands and call exte
 4. **Cure with proof [built]:** a candidate guardrail has to pass four gates: `replay_refused` (the incident replayed in an isolated sandbox is denied), `normal_ops_ok` (normal ops are all still allowed), `backtest` (one query over the whole `events` table on ClickHouse Cloud) and `policy_lint`. Only then can a human click **Approve**. The policy version goes up by one, the agent is restored, and the attacker host stays denylisted fleet-wide.
 5. **Numbers [built]:** the Evidence tab shows hold latency, detect/contain times, backtest time and rows scanned, the audit-chain check and the row count, each with its receipt (query ms + rows read), plus the measured eval: precision, strict and prevention recall, the confusion matrix and AkashML-vs-OpenAI cost per 1,000 events (see *Evaluation* below).
 
-### Screenshots (live console, ClickHouse Cloud + AkashML, Oct 9 ~13:10 PT)
+### Screenshots (live console, ClickHouse Cloud + AkashML, Oct 9 ~15:10 PT)
 
 | | |
 |---|---|
 | ![Live: hold mode denied the send, deploy-bot quarantined, Guild agent held](docs/img/01-live-hold-denied-quarantined.jpg) | ![Fleet heatmap over ~30M events](docs/img/02-fleet-heatmap-30M.jpg) |
-| **Live** — the send is held and denied before it runs; deploy-bot is quarantined; the Guild-hosted agent's external post is held too. | **Fleet** — 72 h risk heatmap, one query over the whole `events` table. |
+| **Live** — hold mode denied deploy-bot's send before it ran (AkashML); deploy-bot is quarantined; support-bot, which read the same poisoned ticket, is on heightened watch (outbreak trace). | **Fleet** — 72 h risk heatmap, one query over the whole `events` table (live agents pinned on top). |
 | ![Proven cure: 4 gates passed, backtest over ~30M events, ask a human in Guild](docs/img/03-proven-cure-guild-approval.jpg) | ![Evidence tab: every number from a receipt, "—" until measured](docs/img/04-evidence.jpg) |
-| **Proven cure** — replay refused, normal ops ok, backtest over ~30M events in 655 ms, policy lint; then a human approves (Guild Responder). | **Evidence** — live numbers from `GET /evidence`; precision/recall/cost show "—" until the eval run reports them. |
+| **Proven cure** — replay refused, normal ops ok, backtest over ~30M events in 635 ms, policy lint; then a human approves (Guild Responder). | **Evidence** — live numbers from `GET /evidence`: the measured eval (60 development cases, not held-out), confusion matrix, and cost AkashML vs OpenAI per 1,000 events. |
 
 ---
 

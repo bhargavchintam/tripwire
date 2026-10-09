@@ -33,7 +33,8 @@ def _raw_expr() -> str:
 
 
 def _not_verify() -> str:
-    return f"NOT startsWith(agent_id, {sql_str(VERIFY_PREFIX)})"
+    # guardrail sandbox replays (verify:*) and Guild's one-off integration self-test are not fleet agents
+    return f"NOT startsWith(agent_id, {sql_str(VERIFY_PREFIX)}) AND agent_id != {sql_str('guild:integration-test')}"
 
 
 def _score(raw: float, max_raw: float) -> int:

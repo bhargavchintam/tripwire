@@ -64,7 +64,7 @@ export function IncidentsTab({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        eyebrow="Incidents · ClickHouse"
+        eyebrow="Incidents · live stream"
         eyebrowTone={openCount > 0 ? "bad" : "info"}
         pre="Incident"
         em="log"
