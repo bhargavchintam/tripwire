@@ -11,8 +11,14 @@ Rules (master §6, frozen for today):
   hold             malicious 0.9 iff the read -> base64 pair above (the call being held is not
                    in the ring yet, so no http_post is required); else benign 0.5.
   baseline_novelty uncertain 0.5 (novelty needs a model or fleet history, not a rule).
-  role_grab        malicious 0.85 iff an assume_role event is present; else benign 0.5.
-  log_tamper       malicious 0.85 iff a disable_logging event is present; else benign 0.5.
+  role_grab        malicious 0.85 iff an assume_role event is present (any result: a denied
+                   attempt is still the signal); else benign 0.5.
+  log_tamper       malicious 0.85 iff a disable_logging event is present (any result); else benign 0.5.
+  secret_exfil_direct (OPT-IN detector rule; contracts.py has no constant for it, rules are plain
+                   strings) malicious 0.9 iff a read_file of a secret-looking path (is_secret_path)
+                   is followed within 60 s by an http_post with is_external=1, with or without an
+                   encode step in between; else benign 0.5. Same predicate as
+                   detection/sql/secret_exfil_direct.sql.
   unknown rule     uncertain 0.5.
 
 Event dicts are the checkpoint ring rows / detector rows: ts_ms, action, target, result,
@@ -34,6 +40,13 @@ from tripwire.contracts import (
     Verdict,
     VerdictLabel,
 )
+
+# Opt-in rule (not in detection.loop.DEFAULT_RULES). tripwire/contracts.py (frozen) has no constant for it;
+# AlertPayload.rule is a plain string and the checkpoint looks its tags up with RULE_TAGS.get(rule, []).
+RULE_SECRET_EXFIL_DIRECT = "secret_exfil_direct"
+# Secret-looking read_file targets, case-insensitive (mirrors the ILIKE list in secret_exfil_direct.sql).
+SECRET_SUBSTRINGS: tuple[str, ...] = (".env", "secret", "credential", "id_rsa")
+SECRET_SUFFIXES: tuple[str, ...] = (".pem",)
 
 WINDOW_MS = 60_000
 CHAIN_CONFIDENCE = 0.9
@@ -88,6 +101,30 @@ def find_chain(events: list[dict[str, Any]], need_external_post: bool) -> dict[s
                     break
                 if post.get("action") == "http_post" and _int(post.get("is_external")) == 1:
                     return {"read": read, "encode": enc, "post": post}
+    return None
+
+
+def is_secret_path(target: Any) -> bool:
+    """True for a secret-looking read_file target: contains .env / secret / credential / id_rsa, or ends with
+    .pem (case-insensitive)."""
+    t = str(target or "").lower()
+    return any(x in t for x in SECRET_SUBSTRINGS) or t.endswith(SECRET_SUFFIXES)
+
+
+def find_direct_exfil(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """First read_file(secret-looking path) -> http_post(is_external=1) pair inside WINDOW_MS, no encode step
+    required. Returns {"read", "post"} or None."""
+    evs = sorted(events, key=_ts)
+    for i, read in enumerate(evs):
+        if read.get("action") != "read_file" or not is_secret_path(read.get("target")):
+            continue
+        t_read = _ts(read)
+        for j in range(i + 1, len(evs)):
+            post = evs[j]
+            if _ts(post) - t_read > WINDOW_MS:
+                break
+            if post.get("action") == "http_post" and _int(post.get("is_external")) == 1:
+                return {"read": read, "post": post}
     return None
 
 
@@ -148,5 +185,17 @@ def rule_verdict(inp: QuickCheckInput) -> Verdict:
                 "malicious", SINGLE_EVENT_CONFIDENCE, f"disable_logging present (target {_short(e.get('target'))})"
             )
         return _rule("benign", NO_MATCH_CONFIDENCE, "no disable_logging event")
+
+    if rule == RULE_SECRET_EXFIL_DIRECT:
+        pair = find_direct_exfil(events)
+        if pair is not None:
+            dt = (_ts(pair["post"]) - _ts(pair["read"])) / 1000
+            return _rule(
+                "malicious",
+                CHAIN_CONFIDENCE,
+                f"read_file {_short(pair['read'].get('target'))} -> external http_post to "
+                f"{_short(pair['post'].get('target'))} {dt:.1f}s later (secret read sent out; no encode step needed)",
+            )
+        return _rule("benign", NO_MATCH_CONFIDENCE, "no secret read -> external http_post within 60 s")
 
     return _rule("uncertain", NO_MATCH_CONFIDENCE, f"no deterministic rule for '{_short(rule, 40)}'")

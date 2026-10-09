@@ -399,3 +399,30 @@ def test_cli_exits_2_when_checkpoint_unreachable(tmp_path):
     )
     assert res.exit_code == 2, res.output
     assert not out.exists()  # nothing ran, nothing written
+
+
+def test_cli_rejects_unknown_rules_before_running(tmp_path):
+    out = tmp_path / "reports"
+    res = CliRunner().invoke(R.app, ["--rules", "secret_theft,bogus", "--no-heartbeat", "--out", str(out)])
+    assert res.exit_code == 2 and "unknown rules" in res.output
+    assert not out.exists()
+
+
+async def test_rules_are_passed_through_to_run_once(monkeypatch):
+    import detection.loop as loop
+
+    seen: list[dict[str, Any]] = []
+
+    async def fake_run_once(client: Any, **kw: Any) -> dict[str, Any]:
+        seen.append(kw)
+        return {"hits": 0}
+
+    monkeypatch.setattr(loop, "run_once", fake_run_once)
+    rules = R.parse_rules(" secret_theft, secret_exfil_direct,,role_grab ")
+    assert rules == ("secret_theft", "secret_exfil_direct", "role_grab") and R.parse_rules("") == ()
+    async with httpx.AsyncClient(base_url="http://cp.test") as http:
+        await R.make_detector("tok", rules)(http)
+        await R.make_detector("tok")(http)
+    assert seen[0] == {"token": "tok", "rules": rules}
+    assert seen[1] == {"token": "tok"}  # no --rules: the detector's DEFAULT_RULES (secret_theft) apply
+
