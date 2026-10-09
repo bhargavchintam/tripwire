@@ -8,7 +8,7 @@
    "intentional": 1
   },
   "scan_file": "semgrep/out/scan.json",
-  "rescanned": "13:58 PT after merging Sripadha's 13:48 push: 223 files, 0 parse errors, 13 findings \u2014 0 open true positives (1 fixed), 1 intentional, 12 false positives (2 new, both in eval/)"
+  "rescanned": "15:45 PT final tree (v1.0-submission + docs): 273 files, 0 parse errors, 13 findings \u2014 same 13 as 13:58 (line numbers shifted by later edits); the new MCP server, copilot, Guild read-back and UI code produced no findings; 0 open true positives"
  },
  "findings": [
   {
@@ -42,7 +42,7 @@
   {
    "rule_id": "tripwire-clickhouse-sql-string-formatting",
    "path": "checkpoint/fleet.py",
-   "line": 99,
+   "line": 100,
    "severity": "WARNING",
    "owasp": [
     "LLM05:2025 Improper Output Handling"
@@ -55,7 +55,7 @@
   {
    "rule_id": "tripwire-clickhouse-sql-string-formatting",
    "path": "checkpoint/fleet.py",
-   "line": 137,
+   "line": 138,
    "severity": "WARNING",
    "owasp": [
     "LLM05:2025 Improper Output Handling"
@@ -107,7 +107,7 @@
   {
    "rule_id": "tripwire-clickhouse-sql-string-formatting",
    "path": "tests/unit/test_app.py",
-   "line": 439,
+   "line": 458,
    "severity": "WARNING",
    "owasp": [
     "LLM05:2025 Improper Output Handling"
@@ -120,7 +120,7 @@
   {
    "rule_id": "tripwire-clickhouse-sql-string-formatting",
    "path": "tests/unit/test_app.py",
-   "line": 462,
+   "line": 481,
    "severity": "WARNING",
    "owasp": [
     "LLM05:2025 Improper Output Handling"
@@ -160,7 +160,7 @@
   {
    "rule_id": "tripwire-unallowlisted-outbound-http-ts",
    "path": "web/src/lib/api.ts",
-   "line": 23,
+   "line": 24,
    "severity": "WARNING",
    "owasp": [
     "LLM06:2025 Excessive Agency"
@@ -187,7 +187,7 @@
   {
    "rule_id": "tripwire-unallowlisted-outbound-http",
    "path": "eval/runner.py",
-   "line": 680,
+   "line": 699,
    "severity": "WARNING",
    "owasp": [
     "LLM06:2025 Excessive Agency",
