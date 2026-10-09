@@ -975,3 +975,35 @@ def test_local_rule_secret_exfil_direct():
     pem = [_ev(T0, "read_file", "/HOME/app/Deploy.PEM"), _ev(T0 + 10, "http_post", "https://x.example.net", is_external=1)]
     assert local_rule_verdict(_qc("secret_exfil_direct", pem)).verdict == "malicious"
 
+
+
+# ---------------------------------------------------------------------------
+# --ignore-prefixes: the background detector leaves eval/test agents alone (demo-lag fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_ignored_prefixes_skip_eval_agents_without_classify_or_block():
+    hit = {**FUNNEL_HIT, "agent_id": "eval-attack-a1-secret-01-abc123"}
+    ch = FakeCH({"funnel": [hit], "recent_events": ATTACK_EVENTS})
+    cp, classify = FakeCheckpoint(), scripted(MALICIOUS)
+    d = make(ch, cp, classify, ignore_prefixes=("eval-", "test-"))
+    s = await d.run_once()
+    assert s["error"] is None and s["ignored"] == 1 and s["blocks"] == 0 and s["alerts"] == 0, s
+    assert not [r for r in cp.requests if r[1].startswith("/block/") or r[1] == "/alerts"], cp.requests
+    assert ch.names().count("recent_events") == 0  # never even fetched the window
+
+
+async def test_no_ignore_prefixes_by_default_when_constructed_directly():
+    hit = {**FUNNEL_HIT, "agent_id": "eval-attack-a1-secret-01-abc123"}
+    ch = FakeCH({"funnel": [hit], "recent_events": ATTACK_EVENTS})
+    cp, classify = FakeCheckpoint(), scripted(MALICIOUS)
+    s = await make(ch, cp, classify).run_once()
+    assert s["ignored"] == 0 and s["blocks"] == 1, s
+
+
+def test_cli_default_ignores_eval_and_test_agents():
+    import inspect
+
+    default = inspect.signature(L.main).parameters["ignore_prefixes"].default
+    value = getattr(default, "default", default)
+    assert "eval-" in value and "test-" in value and "acc-" in value and "e2e-" in value
