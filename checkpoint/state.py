@@ -148,7 +148,8 @@ class State:
             self.proofs.pop(next(iter(self.proofs)))
 
     def hold_on(self, agent_id: str) -> bool:
-        return self.hold_enabled or agent_id in self.hold_forced
+        # Heightened watch (outbreak exposure) holds that agent's risky sends even with the global toggle off.
+        return self.hold_enabled or agent_id in self.hold_forced or self.modes.get(agent_id) == "heightened"
 
     def timing(self, source: str) -> collections.deque[float]:
         d = self.timing_samples.get(source)

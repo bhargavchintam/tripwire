@@ -8,7 +8,7 @@
    "intentional": 1
   },
   "scan_file": "semgrep/out/scan.json",
-  "rescanned": "13:00 PT, 135 files, 0 parse errors, 12 findings (unchanged list)"
+  "rescanned": "13:58 PT after merging Sripadha's 13:48 push: 223 files, 0 parse errors, 13 findings \u2014 0 open true positives (1 fixed), 1 intentional, 12 false positives (2 new, both in eval/)"
  },
  "findings": [
   {
@@ -36,7 +36,8 @@
    "cwe": "CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')",
    "verdict": "true_positive",
    "explanation": "Attacker-chosen text (the hold-mode destination host from ToolCall.target, or raw event targets in detector context) is interpolated into the user message via `context:` OUTSIDE the <<<EVENTS_JSON fence; verified with build_messages() on a crafted target. A prompt-injected 'benign' verdict lets a held external http_post through (hold.decide allows on benign).",
-   "status": "partially fixed 13:00 PT: hold-mode source fixed in checkpoint/hold.py (model context = fixed checkpoint text; host only inside the fenced events JSON; regression test test_model_context_never_carries_agent_controlled_text; re-verified live on AkashML). Sink fence in ai/quick_check.py and detector context in detection/loop.py:405 requested from Sripadha."
+   "status": "FIXED (both halves). Hold-mode source: checkpoint/hold.py sends only fixed checkpoint text as context (Bindu, b1d89b8). Sink: ai/quick_check.py JSON-encodes context inside its own <<<CONTEXT_JSON>>> fence and detection/loop.py no longer puts raw targets in context (Sripadha, 991aed2). Re-scan 13:58 PT: the rule no longer fires anywhere.",
+   "still_reported": false
   },
   {
    "rule_id": "tripwire-clickhouse-sql-string-formatting",
@@ -168,6 +169,34 @@
    "verdict": "false_positive",
    "explanation": "request(path) is only called with same-origin relative literals ('/evidence', `/incidents/${encodeURIComponent(id)}`, ...); no caller passes an absolute or user-supplied URL.",
    "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-unallowlisted-outbound-http",
+   "path": "eval/pricing.py",
+   "line": 185,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM06:2025 Excessive Agency",
+    "LLM02:2025 Sensitive Information Disclosure"
+   ],
+   "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
+   "verdict": "false_positive",
+   "status": "no change needed",
+   "explanation": "_get(url) is only called with the operator-configured AKASHML_BASE_URL + '/models' and the fixed OPENAI_PRICING_URLS constants (price lookup for the eval cost column); no agent, request or model output reaches the URL."
+  },
+  {
+   "rule_id": "tripwire-unallowlisted-outbound-http",
+   "path": "eval/runner.py",
+   "line": 680,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM06:2025 Excessive Agency",
+    "LLM02:2025 Sensitive Information Disclosure"
+   ],
+   "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
+   "verdict": "false_positive",
+   "status": "no change needed",
+   "explanation": "self.http has a fixed base_url (the checkpoint); _get(path) is only called with relative literals (/incidents, /alerts, /status), so the host cannot change."
   }
  ]
 }

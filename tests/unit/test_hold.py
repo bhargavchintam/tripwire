@@ -360,3 +360,18 @@ async def test_tool_rejects_unsafe_agent_ids(mk, bad):
 async def test_tool_accepts_normal_agent_ids(mk, good):
     c, _, _ = await mk()
     assert (await c.post("/tool", json=tool(agent=good))).json()["result"] == "ok"
+
+
+async def test_heightened_agent_is_held_even_with_global_hold_off(mk):
+    """Master §1/§14 Act 3: an agent put on heightened watch by an outbreak has its next risky send held,
+    whether or not the global hold toggle is on."""
+    clf = FakeClassify(verdict=Verdict(verdict="malicious", confidence=0.95, reason="exposed", decision_source="akashml"))
+    c, svc, _ = await mk(history=FakeHistory(), classify=clf)
+    assert (await c.get("/status")).json()["hold_enabled"] is False
+    svc.state.modes["support-bot"] = "heightened"
+    r = (await c.post("/tool", json=tool(agent="support-bot", action="http_post", target="https://partner-sync.example.org/v1"))).json()
+    assert r["result"] == "denied" and r["reason"] == "hold_model"
+    assert len(clf.inputs) == 1 and "heightened" in clf.inputs[0].context
+    # a normal agent with hold off is not held
+    r2 = (await c.post("/tool", json=tool(agent="deploy-bot", action="http_post", target="https://partner-sync.example.org/v1"))).json()
+    assert r2["result"] == "ok" and len(clf.inputs) == 1
