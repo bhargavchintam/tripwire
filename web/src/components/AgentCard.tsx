@@ -371,7 +371,7 @@ export function AgentCard({
               <div className="flex cursor-default items-baseline gap-2">
                 <span className="eyebrow">Denied</span>
                 <Count
-                  value={st?.denied}
+                  value={st?.denied ?? 0}
                   className={cn("num-display text-[26px] leading-none", st?.denied ? "text-bad" : "text-fg")}
                 />
               </div>
