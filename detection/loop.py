@@ -218,17 +218,26 @@ class CheckpointHTTP:
         token: str,
         timeout_s: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
+        """Pass `client` to reuse an existing httpx.AsyncClient (e.g. an in-process ASGITransport client
+        from tests/e2e); it is then not closed by close(). Otherwise a client is built from base_url."""
         self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(
+        self._headers = {"X-Tripwire-Token": token}
+        self._owned = client is None
+        self._client = client or httpx.AsyncClient(
             base_url=self.base_url,
-            headers={"X-Tripwire-Token": token},
+            headers=self._headers,
             timeout=timeout_s,
             transport=transport,
         )
 
+    @classmethod
+    def from_client(cls, client: httpx.AsyncClient, token: str = "") -> "CheckpointHTTP":
+        return cls(str(client.base_url) or "http://checkpoint", token, client=client)
+
     async def status(self) -> CheckpointView:
-        resp = await self._client.get("/status")
+        resp = await self._client.get("/status", headers=self._headers)
         resp.raise_for_status()
         data = resp.json()
         return CheckpointView(
@@ -238,16 +247,17 @@ class CheckpointHTTP:
         )
 
     async def block(self, agent_id: str, payload: AlertPayload) -> httpx.Response:
-        return await self._client.post(f"/block/{agent_id}", json=payload.model_dump())
+        return await self._client.post(f"/block/{agent_id}", json=payload.model_dump(), headers=self._headers)
 
     async def alert(self, payload: AlertPayload) -> httpx.Response:
-        return await self._client.post("/alerts", json=payload.model_dump())
+        return await self._client.post("/alerts", json=payload.model_dump(), headers=self._headers)
 
     async def heartbeat(self, hb: Heartbeat) -> httpx.Response:
-        return await self._client.post("/heartbeat", json=hb.model_dump())
+        return await self._client.post("/heartbeat", json=hb.model_dump(), headers=self._headers)
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._owned:
+            await self._client.aclose()
 
 
 class _Throttle:
@@ -612,6 +622,33 @@ class Detector:
 # ---------------------------------------------------------------------------
 
 app = typer.Typer(add_completion=False, help="Tripwire detector loop (see module docstring).")
+
+
+async def run_once(
+    client: httpx.AsyncClient,
+    *,
+    ch: Any | None = None,
+    classify: ClassifyFn | None = None,
+    rules: tuple[str, ...] | list[str] = DEFAULT_RULES,
+    threshold: float = 0.8,
+    window_s: int = 300,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """One in-process detection pass that talks to the checkpoint ONLY through `client`.
+
+    This is the entry point tests/e2e/test_acceptance.py (Bindu) calls with an httpx.ASGITransport
+    client, so the detector never posts to the live :8000. ClickHouse is read through tripwire.ch
+    (whatever .env / the Makefile's LOCAL_CH points at) unless a `ch` adapter is injected. Returns the
+    same summary dict as Detector.run_once(); it never raises for service errors.
+    """
+    adapter = ch if ch is not None else ClickHouseAdapter()
+    cp = CheckpointHTTP.from_client(client, token if token is not None else get_settings().tripwire_token)
+    detector = Detector(adapter, cp, classify, threshold=threshold, window_s=window_s, rules=rules)
+    try:
+        return await detector.run_once()
+    finally:
+        if ch is None:
+            await adapter.close()
 
 
 def _log_startup(detector: Detector, checkpoint_url: str) -> None:
