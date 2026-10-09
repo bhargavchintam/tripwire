@@ -1,160 +1,173 @@
 {
-  "summary": {
-    "semgrep_version": "1.180.0",
-    "findings": 12,
-    "by_verdict": {
-      "false_positive": 10,
-      "true_positive": 1,
-      "intentional": 1
-    },
-    "scan_file": "semgrep/out/scan.json"
+ "summary": {
+  "semgrep_version": "1.180.0",
+  "findings": 12,
+  "by_verdict": {
+   "false_positive": 10,
+   "true_positive": 1,
+   "intentional": 1
   },
-  "findings": [
-    {
-      "rule_id": "tripwire-unallowlisted-outbound-http",
-      "path": "agents/checkpoint_client.py",
-      "line": 102,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM06:2025 Excessive Agency",
-        "LLM02:2025 Sensitive Information Disclosure"
-      ],
-      "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
-      "verdict": "false_positive",
-      "explanation": "`path` goes to an httpx client with a fixed base_url (CHECKPOINT_URL); every caller in the file passes a relative literal or f\"/...\" path, so the destination host never changes."
-    },
-    {
-      "rule_id": "tripwire-untrusted-content-in-llm-prompt",
-      "path": "ai/quick_check.py",
-      "line": 102,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM01:2025 Prompt Injection"
-      ],
-      "cwe": "CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')",
-      "verdict": "true_positive",
-      "explanation": "Attacker-chosen text (the hold-mode destination host from ToolCall.target, or raw event targets in detector context) is interpolated into the user message via `context:` OUTSIDE the <<<EVENTS_JSON fence; verified with build_messages() on a crafted target. A prompt-injected 'benign' verdict lets a held external http_post through (hold.decide allows on benign)."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "checkpoint/fleet.py",
-      "line": 99,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Interpolated pieces are _raw_expr() (a fixed SQL fragment whose only literal goes through sql_str), an int computed from the server clock and an int()-clamped `hours`, and the code-configured table name. No agent/request/model value reaches the SQL text."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "checkpoint/fleet.py",
-      "line": 137,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Same as fleet.py:99: _raw_expr()/_not_verify() fixed fragments built with sql_str, `since` is an int from the server clock and an int()-clamped `minutes`."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tests/integration/conftest.py",
-      "line": 53,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Test fixture: scratch table name events_test_<uuid4 hex>; no external input."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tests/integration/test_data_sql.py",
-      "line": 28,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Test: `t` is the scratch_table fixture name (uuid4 hex)."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tests/integration/test_data_sql.py",
-      "line": 59,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Test: `t` is the scratch_table fixture name (uuid4 hex)."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tests/unit/test_app.py",
-      "line": 439,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Test: scratch table name events_pytest_<uuid4 hex>."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tests/unit/test_app.py",
-      "line": 462,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "Test: DROP of the same uuid4-named scratch table."
-    },
-    {
-      "rule_id": "tripwire-clickhouse-sql-string-formatting",
-      "path": "tripwire/ch.py",
-      "line": 114,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM05:2025 Improper Output Handling"
-      ],
-      "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
-      "verdict": "false_positive",
-      "explanation": "data/readonly_user.sql is .format()-ed with CLICKHOUSE_RO_USER/RO_PASSWORD from the operator's own .env at `make db` time; no agent, request or model input. (Robustness note: a password containing a quote would break the CREATE USER statement.)"
-    },
-    {
-      "rule_id": "python.fastapi.security.wildcard-cors.wildcard-cors",
-      "path": "tripwire/mock_server.py",
-      "line": 858,
-      "severity": "WARNING",
-      "owasp": [
-        "A05:2021 - Security Misconfiguration",
-        "A02:2025 - Security Misconfiguration"
-      ],
-      "cwe": "CWE-942: Permissive Cross-domain Policy with Untrusted Domains",
-      "verdict": "intentional",
-      "explanation": "Wildcard CORS is real but only on the dev-only MOCK checkpoint (port 8001, synthetic data, every response tagged mock:true, not started by Makefile/Procfile). The real checkpoint (checkpoint/app.py) allows only localhost:5173 origins."
-    },
-    {
-      "rule_id": "tripwire-unallowlisted-outbound-http-ts",
-      "path": "web/src/lib/api.ts",
-      "line": 23,
-      "severity": "WARNING",
-      "owasp": [
-        "LLM06:2025 Excessive Agency"
-      ],
-      "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
-      "verdict": "false_positive",
-      "explanation": "request(path) is only called with same-origin relative literals ('/evidence', `/incidents/${encodeURIComponent(id)}`, ...); no caller passes an absolute or user-supplied URL."
-    }
-  ]
+  "scan_file": "semgrep/out/scan.json",
+  "rescanned": "13:00 PT, 135 files, 0 parse errors, 12 findings (unchanged list)"
+ },
+ "findings": [
+  {
+   "rule_id": "tripwire-unallowlisted-outbound-http",
+   "path": "agents/checkpoint_client.py",
+   "line": 102,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM06:2025 Excessive Agency",
+    "LLM02:2025 Sensitive Information Disclosure"
+   ],
+   "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
+   "verdict": "false_positive",
+   "explanation": "`path` goes to an httpx client with a fixed base_url (CHECKPOINT_URL); every caller in the file passes a relative literal or f\"/...\" path, so the destination host never changes.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-untrusted-content-in-llm-prompt",
+   "path": "ai/quick_check.py",
+   "line": 102,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM01:2025 Prompt Injection"
+   ],
+   "cwe": "CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')",
+   "verdict": "true_positive",
+   "explanation": "Attacker-chosen text (the hold-mode destination host from ToolCall.target, or raw event targets in detector context) is interpolated into the user message via `context:` OUTSIDE the <<<EVENTS_JSON fence; verified with build_messages() on a crafted target. A prompt-injected 'benign' verdict lets a held external http_post through (hold.decide allows on benign).",
+   "status": "partially fixed 13:00 PT: hold-mode source fixed in checkpoint/hold.py (model context = fixed checkpoint text; host only inside the fenced events JSON; regression test test_model_context_never_carries_agent_controlled_text; re-verified live on AkashML). Sink fence in ai/quick_check.py and detector context in detection/loop.py:405 requested from Sripadha."
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "checkpoint/fleet.py",
+   "line": 99,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Interpolated pieces are _raw_expr() (a fixed SQL fragment whose only literal goes through sql_str), an int computed from the server clock and an int()-clamped `hours`, and the code-configured table name. No agent/request/model value reaches the SQL text.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "checkpoint/fleet.py",
+   "line": 137,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Same as fleet.py:99: _raw_expr()/_not_verify() fixed fragments built with sql_str, `since` is an int from the server clock and an int()-clamped `minutes`.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tests/integration/conftest.py",
+   "line": 53,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Test fixture: scratch table name events_test_<uuid4 hex>; no external input.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tests/integration/test_data_sql.py",
+   "line": 28,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Test: `t` is the scratch_table fixture name (uuid4 hex).",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tests/integration/test_data_sql.py",
+   "line": 59,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Test: `t` is the scratch_table fixture name (uuid4 hex).",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tests/unit/test_app.py",
+   "line": 439,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Test: scratch table name events_pytest_<uuid4 hex>.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tests/unit/test_app.py",
+   "line": 462,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "Test: DROP of the same uuid4-named scratch table.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-clickhouse-sql-string-formatting",
+   "path": "tripwire/ch.py",
+   "line": 114,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM05:2025 Improper Output Handling"
+   ],
+   "cwe": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+   "verdict": "false_positive",
+   "explanation": "data/readonly_user.sql is .format()-ed with CLICKHOUSE_RO_USER/RO_PASSWORD from the operator's own .env at `make db` time; no agent, request or model input. (Robustness note: a password containing a quote would break the CREATE USER statement.)",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "python.fastapi.security.wildcard-cors.wildcard-cors",
+   "path": "tripwire/mock_server.py",
+   "line": 858,
+   "severity": "WARNING",
+   "owasp": [
+    "A05:2021 - Security Misconfiguration",
+    "A02:2025 - Security Misconfiguration"
+   ],
+   "cwe": "CWE-942: Permissive Cross-domain Policy with Untrusted Domains",
+   "verdict": "intentional",
+   "explanation": "Wildcard CORS is real but only on the dev-only MOCK checkpoint (port 8001, synthetic data, every response tagged mock:true, not started by Makefile/Procfile). The real checkpoint (checkpoint/app.py) allows only localhost:5173 origins.",
+   "status": "no change needed"
+  },
+  {
+   "rule_id": "tripwire-unallowlisted-outbound-http-ts",
+   "path": "web/src/lib/api.ts",
+   "line": 23,
+   "severity": "WARNING",
+   "owasp": [
+    "LLM06:2025 Excessive Agency"
+   ],
+   "cwe": "CWE-918: Server-Side Request Forgery (SSRF)",
+   "verdict": "false_positive",
+   "explanation": "request(path) is only called with same-origin relative literals ('/evidence', `/incidents/${encodeURIComponent(id)}`, ...); no caller passes an absolute or user-supplied URL.",
+   "status": "no change needed"
+  }
+ ]
 }

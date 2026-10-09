@@ -212,13 +212,20 @@ async def decide(
     heightened = mode == "heightened"
     novel, receipt, lookup_note = await _novelty(call.agent_id, host, ts, lookup, cache)
 
+    # `why` is shown to humans (incident / receipt). `signals` is the model's context line: fixed
+    # checkpoint text only. The host is chosen by the (possibly hijacked) agent, so it reaches the
+    # model only inside the fenced, JSON-escaped events (semgrep/FINDINGS.md #1, OWASP LLM01).
     why: list[str] = []
+    signals: list[str] = []
     if prefix:
         why.append("funnel prefix matched: secret read -> encode command within 60 s")
+        signals.append(why[-1])
     if heightened:
         why.append("agent is on heightened watch (outbreak exposure)")
+        signals.append(why[-1])
     if novel:
         why.append(f"novel destination: no earlier ok http_post to {host} by this agent")
+        signals.append("novel destination: no earlier ok http_post to this host by this agent (see the pending event)")
 
     def done(d: HoldDecision) -> HoldDecision:
         d.timed = True
@@ -245,7 +252,7 @@ async def decide(
         agent_id=call.agent_id,
         rule=RULE_HOLD,
         events=[dict(e) for e in ring] + [pending],
-        context="; ".join(why),
+        context="; ".join(signals),
     )
     try:
         verdict = await asyncio.wait_for(classify(inp), CLASSIFY_TIMEOUT_S)

@@ -54,12 +54,14 @@ docs/PLAYBOOK_README.md
 fixtures/honeytoken_exfil.json
 fixtures/normal_ops.json
 fixtures/secret_theft.json
+guild/RUNBOOK.md
 guild/agent/PROMPT.md
 guild/agent/README.md
 guild/agent/guild.yaml
 guild/openapi.yaml
 pyproject.toml
 requirements.txt
+semgrep/FINDINGS.md
 semgrep/rules/tripwire-agent-security.yaml
 status/bindu.md
 status/sripadha.md

@@ -136,7 +136,7 @@ export function SponsorsTab() {
         proof={
           <>
             <span>
-              {state.approvedIds.length} guardrail{state.approvedIds.length === 1 ? "" : "s"} proven & approved this session
+              {state.approvedIds.length} guardrail{state.approvedIds.length === 1 ? "" : "s"} proven and approved this session
             </span>
             <span className="text-muted">hold decision (median): {fmtMs(e?.hold_decision_ms)}</span>
           </>

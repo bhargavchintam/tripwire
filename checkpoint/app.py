@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -65,6 +66,17 @@ class ReplayRequest(BaseModel):
 class GuildRunIn(BaseModel):
     agent_id: Optional[str] = None  # "owner~agent-name" or UUID; default = first installed agent
     prompt: Optional[str] = None
+
+
+# Agent ids end up in URL paths (/block/{agent_id}, /restore/{agent_id}); refuse path-like ids at
+# the door so a hijacked agent can't pick an id that a client normalises into another endpoint
+# (semgrep/FINDINGS.md §6). Covers deploy-bot, guild:deploy-bot, agent-07, verify:<id>, acc-1.2.
+AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_.\-]{0,63}")
+
+
+def check_agent_id(agent_id: str) -> None:
+    if not AGENT_ID_RE.fullmatch(agent_id) or ".." in agent_id:
+        raise HTTPException(status_code=422, detail="agent_id must match [A-Za-z0-9][A-Za-z0-9:_.-]{0,63} without '..'")
 
 
 GUILD_DEFAULT_PROMPT = "Run the routine release checks for the tripwire service and report status."
@@ -156,6 +168,7 @@ def create_app(
     # ---------------------------------------------------------------- core
     @app.post("/tool", response_model=ToolResult, dependencies=auth)
     async def tool(call: ToolCall) -> ToolResult:
+        check_agent_id(call.agent_id)
         return await svc.handle_tool(call)
 
     @app.get("/health")
@@ -186,6 +199,7 @@ def create_app(
         agent = agent_id or p.agent_id
         if not agent:
             raise HTTPException(status_code=422, detail="agent_id required (body field or ?agent_id=)")
+        check_agent_id(agent)
         payload = AlertPayload.model_validate({**p.model_dump(), "agent_id": agent})
         return await svc.record_alert(agent, payload)
 

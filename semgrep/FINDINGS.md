@@ -1,13 +1,15 @@
 # Semgrep findings: Tripwire's own AI-written code
 
-**Result:** 12 findings. **1 true positive**, 1 intentional (dev-only), 10 false positives. Each one is triaged below. We changed no code to make a finding go away. This file reports and suggests only.
+**Result:** 12 findings. **1 true positive**, 1 intentional (dev-only), 10 false positives. Each one is triaged below. We never edited a rule or the code just to make a finding disappear.
+
+**Status of the true positive (13:00 PT):** the hold-mode path is **fixed** in `checkpoint/hold.py` (the model's context line now carries fixed checkpoint text only; the agent-chosen host reaches the model only inside the fenced JSON). This is covered by a regression test and was re-verified live on AkashML: the attack is still judged malicious at 0.9–1.0 in ~1.3–1.5 s, and normal ops show no false positives. The scan still reports #1 at the sink, because the prompt builder (`ai/quick_check.py:102`) and the detector's context (`detection/loop.py:405`) are in Sripadha's lane. The fence fix there has been requested, see §4.
 
 **Most interesting real finding:** text an attacker controls reaches our own verdict model outside the untrusted-data fence (`ai/quick_check.py:102`, OWASP **LLM01:2025 Prompt Injection**). See §4.
 
 ## 1. What we scanned
 - **Everything in this repo was written live at the event (Oct 9 2026) with Claude Code. It is AI-generated code.** That includes the checkpoint, the agents, the detector, the AkashML client, the React UI and the tests.
-- **Snapshot:** working tree of branch `bindu/core` at about 12:30 PT. It includes in-progress untracked files such as `tripwire/guild_proxy.py`.
-- **133 files**, listed in `semgrep/out/targets.txt`. These are all git-tracked files plus untracked files that are not ignored. Semgrep counted 56 Python files, 36 TypeScript files and 4 YAML files, and ran the language-independent secret rules over all 133.
+- **Snapshot:** working tree of branch `bindu/core` at about 13:00 PT (re-scanned after the hold-mode fix).
+- **135 files**, listed in `semgrep/out/targets.txt`. These are all git-tracked files plus untracked files that are not ignored. Semgrep counted 56 Python files, 36 TypeScript files and 4 YAML files, and ran the language-independent secret rules over all 133.
 - **Excluded:**
   - `.venv`, `web/node_modules`, `web/dist`, `var`, `reports`.
   - `semgrep/tests/`: our rule fixtures, which are deliberately vulnerable.
@@ -20,8 +22,8 @@
 | Tool | Semgrep CE **1.180.0** (`uv tool install semgrep`; no project dependency changed) |
 | Rulesets | custom `semgrep/rules/tripwire-agent-security.yaml` (6 rules) + `p/python`, `p/secrets`, `p/typescript` (fetched online) |
 | Rules | 277 loaded (271 registry + 6 custom); **268 ran** |
-| Files | **133** scanned; ~99.9% of lines parsed (one partial parse at `web/src/tabs/SponsorsTab.tsx:139`, a file being edited during the scan) |
-| Runtime | **4.36 s wall** (12.18 s user), `/usr/bin/time -p` |
+| Files | **135** scanned (56 Python, 36 TypeScript/TSX, plus YAML, SQL, Markdown and config); **0 parse errors** |
+| Runtime | **6.19 s wall** (15.81 s user), `/usr/bin/time -p` |
 | Output | `semgrep/out/scan.json`; verdicts in `semgrep/out/triage.json` |
 | Rule tests | `semgrep --test --config semgrep/rules semgrep/tests` → **6/6 pass**; 20 must-match cases (16 Python, 4 TS) and 18 must-not-match cases (14 Python, 4 TS) |
 
@@ -67,7 +69,7 @@ All rules are taint-mode except the TS HTTP rule, which is pattern-based. All ar
 The checkpoint asks an AkashML model whether a held action is malicious. `ai/quick_check.py` carefully puts the agent's events only inside a `<<<EVENTS_JSON … >>>` block, and the system prompt tells the model to treat that block as untrusted data.
 
 The free-text `context:` line, however, is interpolated *above* the fence, and the prompt describes it as "notes from the detector". What reaches that line:
-- In hold mode, the destination host parsed from the agent's own `ToolCall.target` (`checkpoint/hold.py:221` → `:248`).
+- In hold mode, the destination host parsed from the agent's own `ToolCall.target` (`checkpoint/hold.py`, before the fix).
 - In the detector's non-funnel rules, up to 5 raw event targets (`detection/loop.py:405`).
 
 We confirmed the flow with `build_messages()` and a crafted target. The crafted target's free text (instruction-like wording addressed to the model) appeared verbatim on the `context:` line, outside the fence. **We did not send it to a live model.**
@@ -76,7 +78,9 @@ This matters for AI agents for two reasons:
 - A hijacked agent picks its own exfiltration URL, so it can write instructions to the judge in the one place the judge is told to trust.
 - `hold.decide()` allows the send on a `benign` verdict (`checkpoint/hold.py:291`), so a successful injection could wave a held exfiltration through. Honeytoken payload checks run before hold mode and still trip.
 
-**Suggested fix (not applied):** JSON-encode `context` and move it inside the fenced block, or drop the host from `context`, since it is already in the events.
+**Fix:**
+- **Applied (hold mode):** `checkpoint/hold.py` keeps two lists. `why` is shown to humans and may name the host. `signals` is the only text sent as `context` and is fixed checkpoint wording. Regression test: `tests/unit/test_hold.py::test_model_context_never_carries_agent_controlled_text` asserts that a crafted host never appears before `<<<EVENTS_JSON` in the real `build_messages()` output, and still appears inside it as data.
+- **Requested (Sripadha's lane):** JSON-encode `context` inside the fence in `ai/quick_check.py`, and stop putting raw event targets into the detector's `context` (`detection/loop.py:405`). Until then the finding stays open in the scan.
 
 ## 5. Runtime → code link
 Every tool call carries `code_ref` (`file:line`) into the checkpoint and the ClickHouse `events.code_ref` column.
@@ -92,5 +96,5 @@ Every tool call carries `code_ref` (`file:line`) into the checkpoint and the Cli
 - **The SQL rule is noisy on tests:** 5 of its 8 findings are uuid scratch tables. We left them in rather than tuning the rule to hide them.
 - **The HTTP rule ignores relative paths** because they cannot change the host. They can still change the *path*.
   - **Found by hand during triage, not by Semgrep and not counted:** httpx normalises `..` segments. A client with base_url `http://127.0.0.1:8000` sent `post("/block/../restore/deploy-bot")` as `POST /restore/deploy-bot` (checked with `httpx.MockTransport`, no network).
-  - `agent_id` characters are not restricted by the checkpoint, and the detector builds `f"/block/{agent_id}"` from ClickHouse rows. An agent able to choose its own id could in principle turn a block into a restore.
-  - **We did not run that chain end-to-end.** It is a lead to check, not a confirmed bug.
+  - The detector builds `f"/block/{agent_id}"` from ClickHouse rows. An agent able to choose a path-like id could in principle turn a block into a restore. We never ran that chain end-to-end.
+  - **Hardened anyway:** `POST /tool` and `POST /alerts` now refuse agent ids outside `[A-Za-z0-9][A-Za-z0-9:_.-]{0,63}` or containing `..`, with a 422 (`checkpoint/app.py`, tests `test_tool_rejects_unsafe_agent_ids` / `test_tool_accepts_normal_agent_ids`). Such an id can no longer reach `events`, so the detector never sees one.
