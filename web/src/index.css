@@ -1,59 +1,538 @@
 @import "tailwindcss";
 
-/* Tripwire dark, high-contrast palette. Status colours always ship with an icon + text. */
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+/* Fonts are bundled from npm (offline-safe, no CDN) and imported in src/fonts.ts:
+   Geist (UI), Geist Mono (ids, SQL, code refs, numbers-with-units), Instrument Serif (page titles). */
 
-  --color-bg: #06080b;
-  --color-panel: #0d1117;
-  --color-panel-2: #131a23;
-  --color-line: #253041;
-  --color-fg: #eef2f7;
-  --color-muted: #94a3b8;
-  --color-dim: #64748b;
+/*
+ * Tripwire "Paper & Signal" design tokens (v3, premium light). See web/DESIGN.md.
+ * Every pre-existing token NAME (bg, panel, panel-2, line, fg, muted, dim, ok, held, bad, model, info,
+ * paper, ink, edge ...) is kept; only the values moved. One brand accent (indigo); saturated colour is
+ * otherwise reserved for STATE, always shipped with an icon + text.
+ */
+@theme static {
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif: "Instrument Serif", "Iowan Old Style", "Times New Roman", ui-serif, serif;
 
-  --color-ok: #22c55e;
-  --color-held: #f59e0b;
-  --color-bad: #ef4444;
-  --color-model: #a78bfa;
-  --color-info: #38bdf8;
+  /* Canvas + surfaces (porcelain paper) */
+  --color-bg: #f6f5f2;
+  --color-bg-2: #f1efea;
+  --color-panel: #ffffff;
+  --color-panel-2: #faf9f7;
+  --color-panel-3: #f1f0ec;
+  --color-line: #e7e5e0;
+  --color-line-strong: #d9d6cf;
+  --color-edge: #e7e5e0;
+  --color-edge-strong: #d9d6cf;
 
-  --animate-quarantine: quarantine-pulse 1.6s ease-in-out infinite;
-  @keyframes quarantine-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.55); }
-    50% { box-shadow: 0 0 0 10px rgb(239 68 68 / 0); }
-  }
+  /* Ink */
+  --color-fg: #15161a;
+  --color-muted: #565a61;
+  --color-dim: #7a7e86; /* spec #8B8E95, darkened to >= 4:1 on white for the projector */
+
+  /* Brand: the ONE accent (primary actions, active nav, focus, links) */
+  --color-brand: #3d3ae8;
+  --color-brand-hover: #2f2cc9;
+  --color-brand-soft: #eeeefe;
+  --color-brand-line: #cfcefa;
+
+  /* State: text colour / soft tint / tinted 1px border */
+  --color-ok: #0e8a5f;
+  --color-ok-soft: #e9f7f0;
+  --color-ok-line: #bfe5d3;
+  --color-held: #a86400;
+  --color-held-soft: #fff4df;
+  --color-held-line: #f1d9a8;
+  --color-bad: #c8281e;
+  --color-bad-soft: #fdecea;
+  --color-bad-line: #f5c4bf;
+  --color-model: #6a4fd0;
+  --color-model-soft: #f2effd;
+  --color-model-line: #d8cff7;
+  --color-info: #0b67c2;
+  --color-info-soft: #e9f2fc;
+  --color-info-line: #c3dbf4;
+  --color-neutral: #565a61;
+  --color-neutral-soft: #f1f0ec;
+  --color-neutral-line: #e2dfd8;
+
+  /* Paper (warm editorial sheet, e.g. the incident report) + ink text on it */
+  --color-paper: #fbf8f1;
+  --color-paper-2: #efe8d8;
+  --color-ink: #15161a;
+
+  /* Night sky (the ONE dark moment: Live tab fleet-flow panel). Also used by tooltips. */
+  --color-night: #0b0d12;
+  --color-night-2: #12151c;
+
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-pill: 9999px;
+
+  /* Layered soft shadows (no glows). sm/md/lg override Tailwind's scale. */
+  --shadow-sm: 0 1px 0 rgb(21 22 26 / 0.04), 0 1px 2px rgb(21 22 26 / 0.06);
+  --shadow-md: 0 1px 0 rgb(21 22 26 / 0.04), 0 1px 2px rgb(21 22 26 / 0.06), 0 8px 24px -10px rgb(21 22 26 / 0.12);
+  --shadow-lg: 0 1px 2px rgb(21 22 26 / 0.06), 0 24px 64px -16px rgb(21 22 26 / 0.22);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 0 rgb(21 22 26 / 0.04), 0 1px 2px rgb(21 22 26 / 0.06);
+  --shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 0 rgb(21 22 26 / 0.04), 0 2px 4px rgb(21 22 26 / 0.06), 0 12px 28px -12px rgb(21 22 26 / 0.16);
+  --shadow-glass: 0 1px 0 rgb(21 22 26 / 0.04), 0 1px 2px rgb(21 22 26 / 0.06), 0 8px 24px -14px rgb(21 22 26 / 0.12);
+  --shadow-pop: 0 1px 2px rgb(21 22 26 / 0.06), 0 24px 64px -16px rgb(21 22 26 / 0.22);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-ink: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --animate-quarantine: quarantine-pulse 1.8s ease-in-out infinite;
+  --animate-rise-in: rise-in 0.42s var(--ease-out-soft) both;
+  --animate-fade-in: fade-in 0.24s ease-out both;
+  --animate-rule-draw: rule-draw 0.6s var(--ease-out-soft) both;
+  --animate-ink-sweep: ink-sweep 0.55s var(--ease-out-soft) both;
+  --animate-breathe: breathe 3.6s ease-in-out infinite;
+  --animate-twinkle: twinkle 3.2s ease-in-out infinite;
+  --animate-pulse-ring: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-scan: scan 1.4s var(--ease-ink) infinite;
+  --animate-sheet-in: sheet-in 0.32s var(--ease-out-soft) both;
+  --animate-sheet-out: sheet-out 0.2s ease-in both;
+  --animate-overlay-in: fade-in 0.24s ease-out both;
+  --animate-overlay-out: fade-out 0.18s ease-in both;
+  --animate-pop-in: pop-in 0.18s var(--ease-out-soft) both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+}
+
+/* Keyframes live outside @theme so they are always emitted (fx classes reference them by name). */
+@keyframes quarantine-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(200 40 30 / 0.28); }
+  50% { box-shadow: 0 0 0 8px rgb(200 40 30 / 0); }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes rule-draw {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes ink-sweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes breathe {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.55; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes scan {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+@keyframes sheet-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes sheet-out {
+  from { transform: none; opacity: 1; }
+  to { transform: translateX(24px); opacity: 0; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(3px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+@keyframes held-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(168 100 0 / 0.3); }
+  50% { box-shadow: 0 0 0 8px rgb(168 100 0 / 0); }
 }
 
 html, body, #root { height: 100%; }
+html { color-scheme: light; background-color: var(--color-bg); }
 body {
-  @apply bg-bg text-fg font-sans antialiased;
-  font-feature-settings: "cv11", "ss01";
+  @apply text-fg font-sans antialiased;
+  background-color: var(--color-bg);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-feature-settings: "ss01", "cv11";
+  text-rendering: optimizeLegibility;
 }
-::selection { background: rgb(167 139 250 / 0.35); }
+::selection { background: var(--color-brand-soft); color: var(--color-fg); }
 
-/* Scrollbars that don't glare on a projector */
-* { scrollbar-width: thin; scrollbar-color: #2b3646 transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+
+/* Numbers line up everywhere numbers live. */
+.font-mono, code, kbd, pre, table, time, [data-num] { font-variant-numeric: tabular-nums; }
+number-flow-react { font-variant-numeric: tabular-nums; }
+
+/* One focus ring for the whole app: brand indigo, 2px, offset. */
+:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+.focus-ring:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px var(--color-brand); }
+
+a { text-underline-offset: 3px; }
 
 .md h1, .md h2, .md h3 { @apply font-semibold text-fg mt-4 mb-2; }
+.md h1, .md h2 { font-family: var(--font-serif); font-weight: 400; letter-spacing: -0.01em; }
+.md h1 { @apply text-3xl; }
+.md h2 { @apply text-2xl; }
 .md h3 { @apply text-base; }
 .md p { @apply text-sm leading-6 text-fg/90 my-2; }
 .md ul, .md ol { @apply text-sm list-disc pl-5 my-2; }
-.md code { @apply font-mono text-[12px] bg-panel-2 border border-line rounded px-1 py-0.5; }
-.md pre { @apply font-mono text-[12px] bg-panel-2 border border-line rounded-md p-3 overflow-x-auto; }
+.md code { @apply font-mono text-[12px] bg-panel-2 border border-line rounded-md px-1 py-0.5; }
+.md pre { @apply font-mono text-[12px] bg-panel-2 border border-line rounded-xl p-3 overflow-x-auto; }
 .md table { @apply text-xs w-full border-collapse my-3; }
 .md th, .md td { @apply border border-line px-2 py-1 text-left; }
-.md th { @apply bg-panel-2; }
-.md blockquote { @apply border-l-2 border-held pl-3 text-muted text-sm; }
+.md th { @apply bg-panel-2 text-[12px] font-medium text-muted; }
+.md tr:nth-child(even) td { background: rgb(21 22 26 / 0.018); }
+.md blockquote { @apply border-l-2 border-held-line pl-3 text-muted text-sm; }
 .md strong { @apply text-fg; }
 
-/* Presenter mode (P): everything sized in rem grows ~125% for the projector. */
+/* Presenter mode (P): everything sized in rem grows 125% for the projector. */
 html.presenter { font-size: 125%; }
 
-/* HELD: amber pulse while a hold decision is shown, before the DENIED stamp lands. */
-@keyframes held-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgb(245 158 11 / 0.7); }
-  50% { box-shadow: 0 0 0 12px rgb(245 158 11 / 0); }
+/* HELD: soft amber ring pulse while a hold decision is really pending (state-driven only). */
+.animate-held { animation: held-pulse 0.9s ease-in-out infinite; }
+
+/* ------------------------------------------------------------------------------------------------
+ * Component-layer helpers. They live in @layer components so any Tailwind utility (text-held,
+ * border-ok/50, bg-panel-2 ...) placed on the same element always wins.
+ * ---------------------------------------------------------------------------------------------- */
+@layer components {
+  /* Night token scope: everything inside renders with the dark palette (text-fg is light, etc.).
+     Used by .inset-night (the one dark panel) and by tooltips. */
+  .theme-night {
+    color-scheme: dark;
+    --color-bg: #0b0d12;
+    --color-bg-2: #0e1016;
+    --color-panel: #12151c;
+    --color-panel-2: #191d26;
+    --color-panel-3: #222733;
+    --color-line: #262b36;
+    --color-line-strong: #383e4c;
+    --color-edge: rgb(255 255 255 / 0.1);
+    --color-edge-strong: rgb(255 255 255 / 0.18);
+    --color-fg: #f3f2ee;
+    --color-muted: #a7acb8;
+    --color-dim: #858b98;
+    --color-brand: #8f8cff;
+    --color-brand-hover: #a7a5ff;
+    --color-brand-soft: rgb(143 140 255 / 0.14);
+    --color-brand-line: rgb(143 140 255 / 0.4);
+    --color-ok: #3fd69e;
+    --color-ok-soft: rgb(63 214 158 / 0.12);
+    --color-ok-line: rgb(63 214 158 / 0.38);
+    --color-held: #f3ad45;
+    --color-held-soft: rgb(243 173 69 / 0.12);
+    --color-held-line: rgb(243 173 69 / 0.42);
+    --color-bad: #f5695f;
+    --color-bad-soft: rgb(245 105 95 / 0.13);
+    --color-bad-line: rgb(245 105 95 / 0.45);
+    --color-model: #ab98fb;
+    --color-model-soft: rgb(171 152 251 / 0.13);
+    --color-model-line: rgb(171 152 251 / 0.42);
+    --color-info: #62bcf6;
+    --color-info-soft: rgb(98 188 246 / 0.12);
+    --color-info-line: rgb(98 188 246 / 0.38);
+    --color-neutral: #a7acb8;
+    --color-neutral-soft: rgb(255 255 255 / 0.06);
+    --color-neutral-line: rgb(255 255 255 / 0.14);
+    --color-paper: #efe7d6;
+    --color-paper-2: #e2d7bf;
+    --color-ink: #17140f;
+    color: var(--color-fg);
+  }
+
+  /* The ONE dark "night sky" panel (Live tab fleet-flow / orbit). Deep ink, faint CSS stars, grain.
+     Mount <Starfield /> inside for twinkle, or use <NightPanel> / <GlowCard night>. Decoration only. */
+  .inset-night {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-radius: var(--radius-card);
+    border: 1px solid #1d212b;
+    background-color: var(--color-night);
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgb(255 255 255 / 0.35), transparent 60%),
+      radial-gradient(1px 1px at 68% 14%, rgb(255 255 255 / 0.28), transparent 60%),
+      radial-gradient(1px 1px at 84% 62%, rgb(255 255 255 / 0.3), transparent 60%),
+      radial-gradient(1px 1px at 31% 78%, rgb(255 255 255 / 0.22), transparent 60%),
+      radial-gradient(1.5px 1.5px at 47% 41%, rgb(255 240 220 / 0.3), transparent 60%),
+      radial-gradient(120% 90% at 50% 0%, rgb(120 132 190 / 0.1), transparent 60%),
+      linear-gradient(180deg, var(--color-night) 0%, var(--color-night-2) 100%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), var(--shadow-lg);
+  }
+  .inset-night::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    border-radius: inherit;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 160px 160px;
+  }
+
+  /* Card surface: white panel (what Card / GlowCard use). */
+  .surface {
+    background-color: var(--color-panel);
+  }
+  /* Raised / inset well inside a card (code, proof frames, stat wells). */
+  .surface-raised {
+    background-color: var(--color-panel-2);
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+  }
+  .surface-card {
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Floating translucent white (nav, pills). Pair with `border border-edge`. */
+  .glass {
+    background-color: rgb(255 255 255 / 0.82);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+    box-shadow: var(--shadow-glass);
+  }
+  .theme-night .glass, .inset-night .glass {
+    background-color: rgb(18 21 28 / 0.72);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  }
+
+  /* Soft state tint: text + tint fill + tinted 1px border in one class. */
+  .tint-ok, .tint-held, .tint-bad, .tint-model, .tint-info, .tint-neutral, .tint-brand {
+    color: var(--t);
+    background-color: var(--t-soft);
+    border-color: var(--t-line);
+  }
+  .tint-ok { --t: var(--color-ok); --t-soft: var(--color-ok-soft); --t-line: var(--color-ok-line); }
+  .tint-held { --t: var(--color-held); --t-soft: var(--color-held-soft); --t-line: var(--color-held-line); }
+  .tint-bad { --t: var(--color-bad); --t-soft: var(--color-bad-soft); --t-line: var(--color-bad-line); }
+  .tint-model { --t: var(--color-model); --t-soft: var(--color-model-soft); --t-line: var(--color-model-line); }
+  .tint-info { --t: var(--color-info); --t-soft: var(--color-info-soft); --t-line: var(--color-info-line); }
+  .tint-neutral { --t: var(--color-muted); --t-soft: var(--color-neutral-soft); --t-line: var(--color-neutral-line); }
+  .tint-brand { --t: var(--color-brand); --t-soft: var(--color-brand-soft); --t-line: var(--color-brand-line); }
+
+  /* Tinted focus-style ring (box-shadow) for "the one card that matters now". */
+  .ring-tint-ok { box-shadow: 0 0 0 3px var(--color-ok-soft), var(--shadow-card); }
+  .ring-tint-held { box-shadow: 0 0 0 3px var(--color-held-soft), var(--shadow-card); }
+  .ring-tint-bad { box-shadow: 0 0 0 3px var(--color-bad-soft), var(--shadow-card); }
+  .ring-tint-model { box-shadow: 0 0 0 3px var(--color-model-soft), var(--shadow-card); }
+  .ring-tint-info { box-shadow: 0 0 0 3px var(--color-info-soft), var(--shadow-card); }
+
+  /* LEGACY alias: .glow-* used to be a coloured bottom glow. Now a whisper of state tint washing down
+     from the top of a white card. Still pair it with a tinted border (border-bad-line / border-bad/40). */
+  .glow-ok, .glow-held, .glow-bad, .glow-model, .glow-info, .glow-paper {
+    background-color: var(--color-panel);
+    background-image: linear-gradient(180deg, var(--glow-soft) 0%, transparent 56%);
+  }
+  .glow-ok { --glow: var(--color-ok); --glow-soft: var(--color-ok-soft); }
+  .glow-held { --glow: var(--color-held); --glow-soft: var(--color-held-soft); }
+  .glow-bad { --glow: var(--color-bad); --glow-soft: var(--color-bad-soft); }
+  .glow-model { --glow: var(--color-model); --glow-soft: var(--color-model-soft); }
+  .glow-info { --glow: var(--color-info); --glow-soft: var(--color-info-soft); }
+  .glow-paper { --glow: var(--color-paper-2); --glow-soft: var(--color-paper); }
+
+  /* Hover lift for clickable surfaces: 1px up, shadow sm -> md. Press = scale .98 (.press). */
+  .lift {
+    transition: transform 200ms var(--ease-out-soft), box-shadow 200ms var(--ease-out-soft), border-color 200ms ease-out, background-color 200ms ease-out;
+  }
+  .lift:hover { transform: translateY(-1px); box-shadow: var(--shadow-lift); }
+  .press:active { transform: scale(0.98); }
+
+  /* 1px horizontal divider. */
+  .hairline {
+    display: block;
+    height: 1px;
+    width: 100%;
+    border: 0;
+    background: var(--color-line);
+  }
+
+  /* Mono uppercase label. 12px default; `.eyebrow-lg` = 13px for page headers. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.25;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+  }
+  .eyebrow-lg { font-size: 13px; }
+
+  /* Serif display type (page titles only). <em>/<i> inside becomes the one italic word. */
+  .display {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    letter-spacing: -0.015em;
+    line-height: 1.04;
+    text-wrap: balance;
+  }
+  .display em, .display i { font-style: italic; }
+
+  /* Display numbers (KPIs, hero stats): Geist 600, tight, tabular. Size with text-[40px]/[56px]. */
+  .num-display {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Paper grain. `.grain` = fixed page texture behind content (<Grain /> mounts it once);
+     `.grain-layer` = absolute overlay inside a positioned card (light inside .inset-night). */
+  .grain, .grain-layer {
+    pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.08 0 0 0 0 0.08 0 0 0 0 0.1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 180px 180px;
+  }
+  .grain {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    opacity: 0.022;
+  }
+  .grain-layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0.025;
+    border-radius: inherit;
+  }
+  .inset-night .grain-layer, .theme-night .grain-layer {
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Highlighter behind a word/number (used by <InkMarker />). --ink sets the tone. */
+  .ink {
+    position: relative;
+    isolation: isolate;
+    display: inline-block;
+  }
+  .ink-mark {
+    position: absolute;
+    left: -0.12em;
+    right: -0.12em;
+    bottom: 0.04em;
+    height: 0.34em;
+    z-index: -1;
+    border-radius: 0.12em;
+    background: color-mix(in oklab, var(--ink, var(--color-held)) var(--ink-strength, 18%), transparent);
+    transform-origin: left center;
+    animation: ink-sweep 0.55s var(--ease-out-soft) both;
+  }
+
+  /* Rule that draws itself left -> right (used by <RuleDraw />). */
+  .rule-draw {
+    display: block;
+    height: 1px;
+    width: 100%;
+    transform-origin: left center;
+    background: linear-gradient(90deg, var(--rule, var(--color-line-strong)) 0%, var(--rule, var(--color-line-strong)) 75%, transparent);
+    animation: rule-draw 0.6s var(--ease-out-soft) both;
+  }
+
+  /* Loading skeleton (only while a request / chunk is really in flight). */
+  .skeleton {
+    border-radius: 8px;
+    background-color: var(--color-panel-3);
+    background-image: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 0.75) 50%, transparent 100%);
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: shimmer 1.6s linear infinite;
+  }
+
+  /* Keyboard hint chip. Adapts to its context colour (works inside a solid indigo button too). */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    min-width: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, currentColor 18%, transparent);
+    background: color-mix(in oklab, currentColor 7%, transparent);
+    box-shadow: inset 0 -1px 0 color-mix(in oklab, currentColor 12%, transparent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: none;
+  }
 }
-.animate-held { animation: held-pulse 0.7s ease-in-out infinite; }
+
+/* LEGACY safety net: `text-paper` used to be cream-on-dark emphasis; on porcelain it would vanish. */
+@layer utilities {
+  .text-paper { color: var(--color-fg); }
+  .text-paper\/80 { color: color-mix(in oklab, var(--color-fg) 80%, transparent); }
+  .theme-night .text-paper, .inset-night .text-paper { color: var(--color-paper); }
+}
+
+/* Toasts (sonner): white card, hairline, shadow-lg, state-coloured icon; ink text even for rich types. */
+:root [data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: var(--color-panel);
+  --normal-bg-hover: var(--color-panel-2);
+  --normal-border: var(--color-line);
+  --normal-border-hover: var(--color-line-strong);
+  --normal-text: var(--color-fg);
+  --border-radius: 12px;
+  font-family: var(--font-sans);
+}
+:root [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  color: var(--color-fg);
+  box-shadow: var(--shadow-pop);
+  border-radius: 12px;
+  padding: 12px 14px;
+  gap: 10px;
+  font-size: 13px;
+}
+:root [data-sonner-toaster] [data-sonner-toast] [data-title] { font-weight: 500; color: var(--color-fg); }
+:root [data-sonner-toaster] [data-sonner-toast] [data-description] { color: var(--color-muted); }
+:root [data-sonner-toaster] [data-sonner-toast] [data-close-button] {
+  background: var(--color-panel);
+  border-color: var(--color-line);
+  color: var(--color-muted);
+  box-shadow: var(--shadow-sm);
+}
+:root [data-sonner-toaster] [data-sonner-toast] [data-close-button]:hover { background: var(--color-panel-2); color: var(--color-fg); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="success"] [data-icon] { color: var(--color-ok); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="error"] [data-icon] { color: var(--color-bad); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="warning"] [data-icon] { color: var(--color-held); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="info"] [data-icon] { color: var(--color-info); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="success"] { box-shadow: inset 3px 0 0 var(--color-ok), var(--shadow-pop); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="error"] { box-shadow: inset 3px 0 0 var(--color-bad), var(--shadow-pop); }
+:root [data-sonner-toaster] [data-sonner-toast][data-type="warning"] { box-shadow: inset 3px 0 0 var(--color-held), var(--shadow-pop); }
+
+/* Reduced motion: lifts, staggers, drift and loops off; state changes still land instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .lift:hover, .press:active { transform: none; }
+  .skeleton { animation: none; }
+}

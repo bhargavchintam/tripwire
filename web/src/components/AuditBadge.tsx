@@ -1,5 +1,5 @@
 import { Link2, Link2Off, LoaderCircle } from "lucide-react";
-import { Badge } from "./ui/badge";
+import { StatusPill } from "./badges";
 import { fmtClock, fmtInt } from "../lib/format";
 import { useAudit } from "../hooks/useTripwire";
 
@@ -9,26 +9,52 @@ export function AuditBadge({ agentId }: { agentId: string | undefined }) {
   if (!agentId) return null;
   if (q.isLoading)
     return (
-      <Badge variant="muted">
-        <LoaderCircle className="animate-spin" /> verifying chain…
-      </Badge>
+      <StatusPill
+        variant="muted"
+        icon={<LoaderCircle className="animate-spin" />}
+        tip={<>Verifying the audit hash chain for <span className="font-mono">{agentId}</span></>}
+      >
+        Verifying chain…
+      </StatusPill>
     );
   if (q.isError || !q.data)
     return (
-      <Badge variant="muted" title={(q.error as Error | null)?.message}>
-        <Link2Off /> audit unavailable
-      </Badge>
+      <StatusPill
+        variant="muted"
+        icon={<Link2Off />}
+        tip={(q.error as Error | null)?.message ?? "The audit check did not answer"}
+      >
+        Audit unavailable
+      </StatusPill>
     );
   const a = q.data;
   if (a.intact)
     return (
-      <Badge variant="ok" title={`hash chain for ${a.agent_id} verified`}>
-        <Link2 /> Chain intact ✓ · {fmtInt(a.events)} events{a.mock ? " (mock)" : ""}
-      </Badge>
+      <StatusPill
+        variant="ok"
+        icon={<Link2 />}
+        tip={
+          <>
+            Hash chain for <span className="font-mono">{a.agent_id}</span> verified
+            <span className="text-muted"> · /audit/verify</span>
+          </>
+        }
+      >
+        Chain intact · <span className="font-mono tabular-nums">{fmtInt(a.events)}</span> events
+        {a.mock ? " (mock)" : ""}
+      </StatusPill>
     );
   return (
-    <Badge variant="bad" title={`first broken link at ${a.first_break_ts_ms ?? "?"}`}>
-      <Link2Off /> Chain broken at {fmtClock(a.first_break_ts_ms)}
-    </Badge>
+    <StatusPill
+      variant="bad"
+      icon={<Link2Off />}
+      tip={
+        <>
+          First broken link at <span className="font-mono">{a.first_break_ts_ms ?? "?"}</span>
+        </>
+      }
+    >
+      Chain broken at <span className="font-mono tabular-nums">{fmtClock(a.first_break_ts_ms)}</span>
+    </StatusPill>
   );
 }

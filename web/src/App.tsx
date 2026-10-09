@@ -1,8 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Activity,
   BookCheck,
-  Command,
   Grid3x3,
   Hand,
   Handshake,
@@ -14,7 +13,11 @@ import {
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Header, toggleHold } from "./components/Header";
+import { MotionConfig, motion } from "motion/react";
+import "./fonts";
+import { Header, MockBanner, toggleHold } from "./components/Header";
+import { Grain, TabSkeleton } from "./components/fx";
+import { Tooltip } from "./components/ui/tooltip";
 import { IncidentSheet } from "./components/IncidentSheet";
 import { restoreAgent } from "./components/AgentCard";
 import { CommandPalette, PALETTE_KEY_HINT, type PaletteCommand } from "./components/CommandPalette";
@@ -32,7 +35,11 @@ const PolicyTab = lazy(() => import("./tabs/PolicyTab"));
 const SponsorsTab = lazy(() => import("./tabs/SponsorsTab"));
 
 function Lazy({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<div className="p-6 text-sm text-dim">Loading…</div>}>{children}</Suspense>;
+  return (
+    <Suspense fallback={<TabSkeleton label="Loading tab" />}>
+      {children}
+    </Suspense>
+  );
 }
 
 const TABS = [
@@ -210,33 +217,57 @@ export default function App() {
   ];
 
   return (
+    <MotionConfig reducedMotion="user">
     <TripwireContext.Provider value={ctx}>
      <PresenterContext.Provider value={presenter}>
-      <div className="min-h-full">
-        <Header />
-        <main className="mx-auto max-w-[1600px] px-5 py-4">
+      {/* Barely-visible paper grain on the porcelain canvas (behind content, never data). */}
+      <Grain />
+      <div
+        className="relative z-10 min-h-full"
+        style={{ "--banner-h": state.isMock ? "2.25rem" : "0px" } as CSSProperties}
+      >
+        {/* Direct child of the full-height shell so it stays sticky while scrolling. */}
+        <MockBanner />
+        <Header onOpenCommands={() => setPaletteOpen(true)} commandsHint={PALETTE_KEY_HINT} />
+        <main className="mx-auto max-w-[1440px] px-6 pb-24">
           <Tabs value={tab} onValueChange={setTab}>
-            <div className="flex flex-wrap items-center gap-2">
-              <TabsList>
+            {/* Floating, centred pill nav: sticky below the (optional) MOCK banner. */}
+            <nav
+              aria-label="Sections"
+              className="pointer-events-none sticky z-30 -mx-6 flex justify-center px-6 pt-4 pb-2"
+              style={{ top: "var(--banner-h, 0px)" }}
+            >
+              <TabsList className="pointer-events-auto max-w-full overflow-x-auto">
                 {TABS.map(({ value, label, icon: Icon }) => (
-                  <TabsTrigger key={value} value={value}>
-                    <Icon /> {label}
+                  <TabsTrigger
+                    key={value}
+                    value={value}
+                    className="data-[state=active]:bg-transparent"
+                  >
+                    {tab === value && (
+                      <motion.span
+                        layoutId="tab-pill"
+                        layoutDependency={tab}
+                        aria-hidden
+                        className="absolute inset-0 -z-10 rounded-full bg-brand-soft ring-1 ring-brand-line/70"
+                        transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                      />
+                    )}
+                    <Icon strokeWidth={1.75} /> {label}
                     {value === "incidents" && openCount > 0 && (
-                      <span className="rounded bg-bad px-1.5 font-mono text-[11px] font-bold text-white">{openCount}</span>
+                      <Tooltip content={`${openCount} open incident${openCount === 1 ? "" : "s"}`}>
+                        <span
+                          key={openCount}
+                          className="inline-flex h-[18px] min-w-[18px] animate-pop-in items-center justify-center rounded-full bg-bad px-1 font-mono text-[11px] font-semibold leading-none text-white tabular-nums"
+                        >
+                          {openCount}
+                        </span>
+                      </Tooltip>
                     )}
                   </TabsTrigger>
                 ))}
               </TabsList>
-              {!presenter.on && (
-                <button
-                  onClick={() => setPaletteOpen(true)}
-                  className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-panel px-3 py-1.5 text-sm text-muted hover:text-fg"
-                >
-                  <Command className="size-4" /> Commands
-                  <kbd className="rounded bg-black/25 px-1 font-mono text-[10px]">{PALETTE_KEY_HINT}</kbd>
-                </button>
-              )}
-            </div>
+            </nav>
             <TabsContent value="live">
               <LiveTab onOpenIncident={open} onReplay={replay} onReset={reset} />
             </TabsContent>
@@ -270,5 +301,6 @@ export default function App() {
       </div>
      </PresenterContext.Provider>
     </TripwireContext.Provider>
+    </MotionConfig>
   );
 }
