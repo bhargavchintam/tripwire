@@ -48,7 +48,8 @@ Reason = Literal["", "blocked", "hold_policy", "hold_model", "hold_rule", "honey
 VerdictLabel = Literal["malicious", "benign", "uncertain"]
 
 # Who made a decision. Shown to judges as-is; never relabel a rule decision as a model one.
-DecisionSource = Literal["akashml", "rule_only", "quorum", "honeytoken", "policy"]
+# "openai" added 11:20 (Sripadha's CCR, additive): a verdict from the OpenAI fallback model.
+DecisionSource = Literal["akashml", "rule_only", "quorum", "honeytoken", "policy", "openai"]
 
 AgentMode = Literal["normal", "heightened", "quarantined"]
 

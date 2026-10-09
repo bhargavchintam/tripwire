@@ -62,6 +62,14 @@ class ReplayRequest(BaseModel):
     agent_id: Optional[str] = None
 
 
+class GuildRunIn(BaseModel):
+    agent_id: Optional[str] = None  # "owner~agent-name" or UUID; default = first installed agent
+    prompt: Optional[str] = None
+
+
+GUILD_DEFAULT_PROMPT = "Run the routine release checks for the tripwire service and report status."
+
+
 class AlertIn(AlertPayload):
     """AlertPayload has no agent_id; POST /alerts accepts it in the body or as ?agent_id=."""
 
@@ -316,19 +324,55 @@ def create_app(
 
     # ---------------------------------------------------------------- Guild trigger
     @app.post("/guild/run", dependencies=auth)
-    async def guild_run() -> JSONResponse:
+    async def guild_run(body: Optional[GuildRunIn] = None) -> JSONResponse:
+        """Start a session for the Guild-hosted agent (docs.guild.ai/platform/api-triggers).
+
+        GUILD_TRIGGER_URL = https://api.guild.ai/v1/workspaces/<owner>~<workspace>/sessions
+        GUILD_TRIGGER_KEY = "<key_id>:<key_secret>" (HTTP Basic). An ACCOUNT key may only start
+        "chat" sessions; a TRIGGER key uses "api_trigger" — we try chat first, then fall back.
+        """
         url, key = settings.guild_trigger_url.strip(), settings.guild_trigger_key.strip()
         if not url or not key:
             return JSONResponse(status_code=503, content={"detail": "guild trigger not configured"})
-        user, _, pw = key.partition(":")  # "user:pass", or the key alone as the Basic username
+        user, _, pw = key.partition(":")
+        basic = httpx.BasicAuth(user, pw)
+        prompt = (body.prompt if body and body.prompt else None) or GUILD_DEFAULT_PROMPT
+        agent_id = body.agent_id if body and body.agent_id else None
         try:
             async with httpx.AsyncClient(timeout=GUILD_TIMEOUT_S) as c:
-                r = await c.post(url, json={"input": "run release checks"}, auth=httpx.BasicAuth(user, pw))
+                if not agent_id:  # use the first agent installed in the workspace
+                    ra = await c.get(url.rsplit("/sessions", 1)[0] + "/workspace_agents", auth=basic)
+                    items = ra.json().get("items", []) if ra.is_success else []
+                    if not items:
+                        return JSONResponse(
+                            status_code=409,
+                            content={"detail": "no agent installed in the Guild workspace yet", "agents_status": ra.status_code},
+                        )
+                    agent_id = (items[0].get("agent") or {}).get("full_name") or items[0].get("id")
+                r = await c.post(
+                    url, auth=basic, json={"session_type": "chat", "agent_id": agent_id, "initial_prompt": prompt}
+                )
+                if r.status_code == 403:  # trigger key: chat not allowed, api_trigger is
+                    r = await c.post(
+                        url,
+                        auth=basic,
+                        json={"session_type": "api_trigger", "agent_id": agent_id, "agent_input": {"text": prompt}},
+                    )
         except httpx.HTTPError as exc:
             return JSONResponse(status_code=502, content={"detail": f"guild trigger unreachable: {type(exc).__name__}"})
+        try:
+            session_url = r.json().get("session_url")
+        except Exception:  # noqa: BLE001
+            session_url = None
         return JSONResponse(
             status_code=200,
-            content={"status": r.status_code, "ok": r.is_success, "body": r.text[:GUILD_BODY_MAX]},
+            content={
+                "status": r.status_code,
+                "ok": r.is_success,
+                "agent_id": agent_id,
+                "session_url": session_url,
+                "body": r.text[:GUILD_BODY_MAX],
+            },
         )
 
     # ---------------------------------------------------------------- UI (mounted LAST)

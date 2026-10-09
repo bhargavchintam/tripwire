@@ -203,28 +203,68 @@ async def test_backtest_heatmap_top_503_without_clickhouse(client):
     assert (await client.get("/fleet/top?minutes=60&limit=10")).status_code == 503
 
 
-async def test_guild_run_forwards_with_basic_auth(tmp_path, monkeypatch):
-    seen = {}
+GUILD_URL = "https://guild.example/v1/workspaces/o~w/sessions"
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen["auth"] = req.headers.get("authorization")
-        seen["body"] = json.loads(req.content)
-        return httpx.Response(202, text="queued " + "x" * 5000)
 
+def _guild_app(tmp_path, monkeypatch, handler):
     real = httpx.AsyncClient
     monkeypatch.setattr(app_mod.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
     app = create_app(
         writer=InMemoryWriter(),
-        settings=make_settings(guild_trigger_url="https://guild.example/trigger", guild_trigger_key="k3y"),
+        settings=make_settings(guild_trigger_url=GUILD_URL, guild_trigger_key="kid:ksecret"),
         state_path=tmp_path / "s.json",
         ch_enabled=False,
         web_dist=None,
     )
-    async with real(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+    return real(transport=httpx.ASGITransport(app=app), base_url="http://t")
+
+
+async def test_guild_run_starts_chat_session_for_first_installed_agent(tmp_path, monkeypatch):
+    """Account key flow (docs.guild.ai): discover the installed agent, start a chat session."""
+    seen: list[tuple[str, str, dict | None, str | None]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content) if req.content else None
+        seen.append((req.method, req.url.path, body, req.headers.get("authorization")))
+        if req.url.path.endswith("/workspace_agents"):
+            return httpx.Response(200, json={"items": [{"id": "wa-1", "agent": {"full_name": "o~release-bot"}}]})
+        return httpx.Response(201, json={"id": "s-1", "session_url": "https://app.guild.ai/sessions/s-1"})
+
+    async with _guild_app(tmp_path, monkeypatch, handler) as c:
         r = await c.post("/guild/run")
-    body = r.json()
-    assert r.status_code == 200 and body["status"] == 202 and len(body["body"]) == 2048
-    assert seen["body"] == {"input": "run release checks"} and seen["auth"].startswith("Basic ")
+    out = r.json()
+    assert r.status_code == 200 and out["status"] == 201 and out["ok"] is True
+    assert out["agent_id"] == "o~release-bot" and out["session_url"].endswith("/s-1")
+    (m1, p1, _, a1), (m2, p2, b2, a2) = seen
+    assert (m1, p1) == ("GET", "/v1/workspaces/o~w/workspace_agents")
+    assert (m2, p2) == ("POST", "/v1/workspaces/o~w/sessions")
+    assert b2["session_type"] == "chat" and b2["agent_id"] == "o~release-bot" and b2["initial_prompt"]
+    assert a1.startswith("Basic ") and a2.startswith("Basic ")
+
+
+async def test_guild_run_falls_back_to_api_trigger_on_403(tmp_path, monkeypatch):
+    """Trigger keys may not start chat sessions (403) — retry as api_trigger."""
+    bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        b = json.loads(req.content)
+        bodies.append(b)
+        return httpx.Response(403 if b["session_type"] == "chat" else 201, json={"session_url": "u"})
+
+    async with _guild_app(tmp_path, monkeypatch, handler) as c:
+        r = await c.post("/guild/run", json={"agent_id": "o~release-bot", "prompt": "go"})
+    assert r.json()["status"] == 201
+    assert [b["session_type"] for b in bodies] == ["chat", "api_trigger"]
+    assert bodies[1]["agent_input"] == {"text": "go"}
+
+
+async def test_guild_run_409_when_no_agent_installed(tmp_path, monkeypatch):
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": []})
+
+    async with _guild_app(tmp_path, monkeypatch, handler) as c:
+        r = await c.post("/guild/run")
+    assert r.status_code == 409 and "no agent installed" in r.json()["detail"]
 
 
 def _drain(q):

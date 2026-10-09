@@ -161,8 +161,15 @@ def _candidate(cur: Policy, agent: str, dests: list[str], hist: list[str]) -> tu
 
 
 async def prove(svc: Checkpoint, incident_id: str) -> dict[str, Any]:
+    from checkpoint.service import Conflict
+
     inc = svc.get_incident(incident_id)  # NotFound -> 404
     st = svc.state
+    # Re-proving an approved incident would replace the stored proof (dropping approved_ms)
+    # and allow a second approve that bumps the policy again. Refuse it.
+    existing = st.proofs.get(incident_id)
+    if existing and existing.get("approved_ms"):
+        raise Conflict("guardrail already approved for this incident", reason="already_approved", incident_id=incident_id)
     agent = inc.agent_id
     vagent = VERIFY_PREFIX + agent
     cur = st.policy
@@ -330,8 +337,17 @@ async def approve(svc: Checkpoint, incident_id: str) -> dict[str, Any]:
         inc.closed_ms = now
         closed.append(inc)
     if inc.outbreak:
+        # The approved guardrail now protects the whole fleet, so exposed agents come back too:
+        # quarantined ones (e.g. stopped by the IOC push) are restored, heightened ones go normal.
         for a in inc.outbreak.exposed_agents:
-            if a != agent and st.modes.get(a) == "heightened":
+            if a == agent:
+                continue
+            if a in st.blocked or st.modes.get(a) == "quarantined":
+                async with st.lock_for(a):
+                    _, also_closed = svc._restore_locked(a, now)
+                closed.extend(also_closed)
+                restored.append(a)
+            elif st.modes.get(a) == "heightened":
                 st.modes[a] = "normal"
                 restored.append(a)
     proof["approved_ms"] = now

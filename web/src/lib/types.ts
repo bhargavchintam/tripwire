@@ -4,7 +4,7 @@ export type AgentMode = "normal" | "heightened" | "quarantined";
 export type Result = "ok" | "denied" | "error";
 export type Reason = "" | "blocked" | "hold_policy" | "hold_model" | "hold_rule" | "honeytoken";
 export type VerdictLabel = "malicious" | "benign" | "uncertain";
-export type DecisionSource = "akashml" | "rule_only" | "quorum" | "honeytoken" | "policy";
+export type DecisionSource = "akashml" | "rule_only" | "quorum" | "honeytoken" | "policy" | "openai";
 
 export const LIVE_AGENTS = ["deploy-bot", "support-bot"] as const;
 

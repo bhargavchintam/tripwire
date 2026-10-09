@@ -65,6 +65,8 @@ const SOURCE: Record<string, { label: string; variant: BadgeVariant; icon: typeo
   rule_only: { label: "rule only", variant: "info", icon: ScrollText },
   honeytoken: { label: "honeytoken", variant: "held", icon: KeyRound },
   policy: { label: "policy", variant: "info", icon: ScrollText },
+  // OpenAI fallback model (Sripadha's CCR, 11:20) — labelled as its own provider, never as AkashML.
+  openai: { label: "OpenAI model (fallback)", variant: "model", icon: Brain },
 };
 
 /** decision_source shown truthfully: a rule decision is never labelled as a model one. */

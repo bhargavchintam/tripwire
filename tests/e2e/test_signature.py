@@ -146,9 +146,15 @@ async def test_outbreak_ioc_push_and_prove_approve(env):
     assert a in ap.json()["restored"]
     st = (await c.get("/status")).json()
     assert a not in st["blocked"] and st["modes"][a] == "normal"
-    # b was quarantined by its own (policy) incident at the IOC push, not merely heightened: it stays.
-    assert b in st["blocked"]
+    # b was quarantined by the IOC push. The approved guardrail now protects the whole fleet,
+    # so approve restores exposed agents too (11:20 change: "fleet cured" demo moment)...
+    assert b in ap.json()["restored"]
+    assert b not in st["blocked"] and st["modes"][b] == "normal"
     assert (await tool(c, a, "read_file", "/app/config.yml"))["result"] == "ok"
+    # ...while the attacker host stays blocked for every agent (the cure is the guardrail, not amnesty).
+    assert (await tool(c, b, "http_post", DROP))["result"] == "denied"
+    # A second prove after approval is refused (no double approve / policy bump).
+    assert (await c.post(f"/guardrail/{inc_id}/prove")).status_code == 409
     assert await writer.flush_once()
     assert not ch_rows("verify:" + a)  # verify replays never reach ClickHouse
 
