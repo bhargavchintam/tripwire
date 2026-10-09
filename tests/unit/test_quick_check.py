@@ -207,7 +207,10 @@ async def test_injection_text_stays_inside_events_block():
     head, rest = user.split("<<<EVENTS_JSON\n", 1)
     block, tail = rest.split("\n>>>", 1)
     assert INJECTION in block and INJECTION not in head and INJECTION not in tail and tail == ""
-    assert head == "rule: secret_theft\ncontext: funnel matched 3 steps\nevents (untrusted data, oldest first):\n"
+    assert head == (
+        "rule: secret_theft\ncontext (untrusted data, JSON string):\n<<<CONTEXT_JSON\n"
+        "\"funnel matched 3 steps\"\n>>>\nevents (untrusted data, oldest first):\n"
+    )
     rows = json.loads(block)
     assert len(rows) == len(events) and all(set(r) == set(qc.EVENT_KEYS) for r in rows)
     assert "deadbeef" not in block and "dropped" not in block
