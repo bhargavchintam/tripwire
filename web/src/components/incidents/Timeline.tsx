@@ -1,12 +1,44 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Radio } from "lucide-react";
+import { CornerDownRight, Radio } from "lucide-react";
 import { Button } from "../ui/button";
 import { ReasonText, ResultBadge } from "../badges";
-import { EASE_OUT, SPRING, toneVar, type Tone } from "../fx";
+import { Chip, EASE_OUT, SPRING, toneVar, type Tone } from "../fx";
 import { fmtClock } from "../../lib/format";
 import { cn } from "../../lib/utils";
+import { useTripwire } from "../../hooks/useTripwire";
 import type { IncidentStep } from "../../lib/types";
+
+/** The checkpoint row's `tainted_by` (the untrusted input the agent read before this call), or "". */
+export function taintOf(x: { tainted_by?: unknown } | null | undefined): string {
+  const t = x?.tainted_by;
+  return typeof t === "string" ? t.trim() : "";
+}
+
+/**
+ * "from ticket:4821": shown only when a real checkpoint row carries a non-empty `tainted_by`.
+ * Held tint (amber = suspicious, pending), mono, dotted link-style underline; the title explains it.
+ */
+export function TaintChip({ source, className }: { source: string; className?: string }) {
+  if (!source) return null;
+  return (
+    <Chip
+      tone="held"
+      mono
+      size="sm"
+      title={`this action came after the agent read untrusted input ${source}`}
+      icon={<CornerDownRight aria-hidden strokeWidth={2} />}
+      className={cn("max-w-[200px] cursor-help", className)}
+    >
+      <span className="min-w-0 truncate underline decoration-held/50 decoration-dotted underline-offset-2">
+        from {source}
+      </span>
+    </Chip>
+  );
+}
+
+const stepKey = (agent: string, s: { ts_ms: number; action: string; target: string }) =>
+  `${agent}\u0000${s.ts_ms}\u0000${s.action}\u0000${s.target}`;
 
 /** Tone per step result: ok = green, held denial = amber, other denial = red. */
 export function stepTone(s: IncidentStep): Tone {
@@ -104,9 +136,30 @@ export function Scrubber({
  * once when the sheet opens; a step that arrives later just appears (no fake delay). The caller keys
  * it by incident id so switching incidents replays it.
  */
-export function TimelineSteps({ steps, pos }: { steps: IncidentStep[]; pos: number }) {
+export function TimelineSteps({
+  steps,
+  pos,
+  agentId,
+}: {
+  steps: IncidentStep[];
+  pos: number;
+  /** The incident's agent: joins each step to its streamed tool_event row to read `tainted_by`. */
+  agentId?: string;
+}) {
   const n = steps.length;
   const reduce = useReducedMotion();
+  const { state } = useTripwire();
+  // Incident steps carry no taint field, so join on the real streamed checkpoint rows (same agent,
+  // ts_ms, action, target). A step whose row is not retained simply shows no chip.
+  const taintByStep = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!agentId) return m;
+    for (const e of state.events) {
+      const t = e.agent_id === agentId ? taintOf(e) : "";
+      if (t) m.set(stepKey(agentId, e), t);
+    }
+    return m;
+  }, [state.events, agentId]);
   const mounting = useRef(true);
   useEffect(() => {
     mounting.current = false;
@@ -119,6 +172,7 @@ export function TimelineSteps({ steps, pos }: { steps: IncidentStep[]; pos: numb
         const current = i === pos - 1 && pos < n;
         const tone: Tone = future ? "neutral" : stepTone(s);
         const flagged = !future && (tone === "held" || tone === "bad");
+        const taint = future ? "" : taintOf(s as { tainted_by?: unknown }) || (agentId ? taintByStep.get(stepKey(agentId, s)) ?? "" : "");
         const play = mounting.current && !reduce && i < 40;
         const d = play ? Math.min(0.08 + i * 0.05, 0.9) : 0;
         return (
@@ -166,6 +220,7 @@ export function TimelineSteps({ steps, pos }: { steps: IncidentStep[]; pos: numb
                     {s.reason ? <ReasonText reason={s.reason} /> : null}
                   </>
                 )}
+                {taint && <TaintChip source={taint} />}
               </div>
               <div className="mt-0.5 truncate font-mono text-xs text-muted" title={s.target}>
                 {s.target}

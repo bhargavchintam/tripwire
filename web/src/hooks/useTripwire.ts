@@ -55,7 +55,18 @@ export interface TripwireState {
   // Last eval-runner heartbeat ({source:'eval', metrics, received_ms}). Kept across snapshots, like /evidence.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   evalHeartbeat: Record<string, any> | null;
+  // Last detector heartbeat (SSE metrics with source 'detector'): the envelope ts_ms it arrived with, its
+  // finite per-query timings and its metrics. Kept across snapshots (the snapshot does not carry it).
+  detectorHeartbeat: DetectorHeartbeat | null;
   lastSeq: number;
+}
+
+export interface DetectorHeartbeat {
+  ts_ms: number; // SSE envelope ts_ms of the metrics event
+  received_ms?: number; // checkpoint receive time, when present
+  timings: Record<string, number>; // query_timings_ms (finite, non-negative only)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  metrics: Record<string, any>;
 }
 
 const MAX_EVENTS = 200;
@@ -84,6 +95,7 @@ export const initialState: TripwireState = {
   lastBacktest: null,
   queryTimings: [],
   evalHeartbeat: null,
+  detectorHeartbeat: null,
   lastSeq: 0,
 };
 
@@ -91,6 +103,22 @@ export const initialState: TripwireState = {
 function timingValues(t: unknown): number[] {
   if (!t || typeof t !== "object") return [];
   return Object.values(t as Record<string, unknown>).filter((v): v is number => isNum(v) && v >= 0);
+}
+
+/** The detector heartbeat as stored: envelope ts, finite timings by query name, metrics. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function detectorHeartbeat(d: Record<string, any>, tsMs: number): DetectorHeartbeat {
+  const timings: Record<string, number> = {};
+  const t = d.query_timings_ms;
+  if (t && typeof t === "object") {
+    for (const [k, v] of Object.entries(t as Record<string, unknown>)) if (isNum(v) && v >= 0) timings[k] = v;
+  }
+  return {
+    ts_ms: isNum(tsMs) ? toMs(tsMs) : toMs(d.received_ms),
+    received_ms: isNum(d.received_ms) ? d.received_ms : undefined,
+    timings,
+    metrics: d.metrics && typeof d.metrics === "object" ? d.metrics : {},
+  };
 }
 
 /** Live agents only: synthetic background agents are named agent-NN; guardrail replays run as verify:*;
@@ -308,6 +336,7 @@ function reducer(state: TripwireState, action: Action): TripwireState {
         policyVersion,
         queryTimings: timings.length ? [...base.queryTimings, ...timings].slice(-MAX_TIMINGS) : base.queryTimings,
         evalHeartbeat: d.source === "eval" ? d : base.evalHeartbeat,
+        detectorHeartbeat: d.source === "detector" ? detectorHeartbeat(d, ev.ts_ms) : base.detectorHeartbeat,
       };
     }
 
@@ -458,7 +487,8 @@ export function useTripwire(): TripwireCtx {
 // ---- React Query: REST reads ------------------------------------------------
 
 export function useEvidence() {
-  return useQuery({ queryKey: ["evidence"], queryFn: api.evidence, refetchInterval: 2000, retry: false });
+  // Keep polling when the tab is unfocused (projector / screen recording): every tile must stay live.
+  return useQuery({ queryKey: ["evidence"], queryFn: api.evidence, refetchInterval: 2000, refetchIntervalInBackground: true, retry: false });
 }
 
 export function useIncident(id: string | null) {

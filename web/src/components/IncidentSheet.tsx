@@ -284,7 +284,7 @@ export function IncidentSheet({ id, onClose }: { id: string | null; onClose: () 
               }
             >
               {n > 0 && <Scrubber steps={inc.steps} pos={pos} onScrub={(p) => setScrub({ id, pos: p })} />}
-              <TimelineSteps key={inc.id} steps={inc.steps} pos={pos} />
+              <TimelineSteps key={inc.id} steps={inc.steps} pos={pos} agentId={inc.agent_id} />
             </SheetSection>
 
             <SheetSection id="cure" reveal={3} revealOn="view" className="bg-panel-2/60">

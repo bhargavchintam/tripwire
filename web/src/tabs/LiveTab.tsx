@@ -10,6 +10,8 @@ import { AttackChain } from "../components/AttackChain";
 import { EventTable } from "../components/EventTable";
 import { IncidentFeed, sortedIncidents } from "../components/IncidentFeed";
 import { OutbreakPanel } from "../components/OutbreakPanel";
+import { DetectorPulse } from "../components/live/DetectorPulse";
+import { TicketExhibit } from "../components/live/TicketExhibit";
 import { LIVE_AGENTS } from "../lib/types";
 import { cn } from "../lib/utils";
 import { isLiveAgent, useTripwire } from "../hooks/useTripwire";
@@ -90,7 +92,10 @@ export function LiveTab({
         }
         actions={
           <div className="flex flex-col items-end gap-2.5">
+            {/* Detector heartbeat pill: its own row normally (no extra header height), inline in presenter. */}
+            {!presenter && <DetectorPulse />}
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {presenter && <DetectorPulse />}
               <Button variant="outline" size="lg" onClick={onReset}>
                 <RotateCcw /> Reset demo <Kbd>0</Kbd>
               </Button>
@@ -147,6 +152,9 @@ export function LiveTab({
         <SectionLabel icon={<Gauge />}>Measured · GET /evidence</SectionLabel>
         <KpiStrip />
       </section>
+
+      {/* Act 3 exhibit: the recorded poisoned ticket and the agents that really read it (below the fold). */}
+      <TicketExhibit />
 
       {/* Row 3: the latest incident's chain. */}
       <AttackChain incident={latest} mode={latest ? state.modes[latest.agent_id] : undefined} />
