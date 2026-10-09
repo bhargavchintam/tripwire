@@ -56,7 +56,9 @@ def test_events_table_exists(ch_client):
         "SELECT engine, sorting_key, partition_key FROM system.tables "
         "WHERE database = 'tripwire' AND name = 'events'"
     ).first_row
-    assert tuple(row) == ("MergeTree", "agent_id, ts", "toStartOfHour(ts)")
+    # ClickHouse Cloud transparently runs MergeTree tables as SharedMergeTree.
+    assert row[0] in ("MergeTree", "SharedMergeTree"), row
+    assert tuple(row[1:]) == ("agent_id, ts", "toStartOfHour(ts)")
 
 
 def test_columns_exactly_match_schema_sql(ch_client):

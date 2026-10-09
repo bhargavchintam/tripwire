@@ -95,7 +95,8 @@ export const api = {
     return { status: res.status, body: text };
   },
   replay: (scenario = "secret_theft") => postJSON<Record<string, unknown>>("/demo/replay", { scenario }),
-  reset: () => postJSON<Record<string, unknown>>("/demo/reset"),
+  // full=1: also restore the default policy + clear proofs so every demo take starts clean.
+  reset: () => postJSON<Record<string, unknown>>("/demo/reset?full=1"),
   restore: (agentId: string) => postJSON<Record<string, unknown>>(`/restore/${enc(agentId)}`),
   setHold: (enabled: boolean) => postJSON<{ hold_enabled?: boolean }>("/config/hold", { enabled }),
 };

@@ -461,3 +461,19 @@ async def test_clickhouse_writer_and_audit_roundtrip(tmp_path):
     finally:
         admin.command(f"DROP TABLE IF EXISTS {table}")
 
+
+
+async def test_demo_reset_full_restores_default_policy_plain_reset_keeps_it(client):
+    pol = (await client.get("/policy")).json()
+    pol["denylist"] = ["drop.example.net"]
+    v_set = (await client.put("/policy", json=pol)).json()["version"]
+
+    plain = (await client.post("/demo/reset")).json()
+    assert plain["full"] is False
+    kept = (await client.get("/policy")).json()
+    assert kept["denylist"] == ["drop.example.net"] and kept["version"] == v_set
+
+    full = (await client.post("/demo/reset?full=1")).json()
+    assert full["full"] is True and full["policy_version"] == v_set + 1
+    fresh = (await client.get("/policy")).json()
+    assert fresh["denylist"] == [] and fresh["version"] == v_set + 1

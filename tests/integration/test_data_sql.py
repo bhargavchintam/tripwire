@@ -33,7 +33,9 @@ def test_seed_live_agents(ch_client, scratch_table):
                countIf(synthetic != 1), countIf(result != 'ok' OR reason != ''),
                countIf(hash != '' OR prev_hash != '')
         FROM {t}""")
-    assert min_age >= TEN_MIN_MS and max_age <= THREE_DAYS_MS
+    # Rows keep aging after the insert (slow remote load + time until this check): allow 15 min
+    # of slack on the upper bound. The invariant that matters is the lower bound (>= 10 min).
+    assert min_age >= TEN_MIN_MS and max_age <= THREE_DAYS_MS + 15 * 60 * 1000
     assert (not_synth, not_ok, chained) == (0, 0, 0)
     assert table_stats(ch_client, t)["is_external_mismatch"] == 0
 
@@ -76,7 +78,9 @@ def test_background_load_chunked(ch_client, scratch_table):
                uniqExact(agent_id, ts, action, target, bytes)
         FROM {t}""")
     assert total == 50_000 and agents == 40 and bad_agents == 0 and not_synth == 0
-    assert min_age >= TEN_MIN_MS and max_age <= THREE_DAYS_MS
+    # Rows keep aging after the insert (slow remote load + time until this check): allow 15 min
+    # of slack on the upper bound. The invariant that matters is the lower bound (>= 10 min).
+    assert min_age >= TEN_MIN_MS and max_age <= THREE_DAYS_MS + 15 * 60 * 1000
     assert hours <= 73  # stays under max_partitions_per_insert_block = 100
     assert ext > 0 and internal_http > 0
     assert distinct > 49_000  # chunks are not copies of each other

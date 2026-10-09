@@ -466,8 +466,17 @@ class Checkpoint:
             "closed_incidents": [i.id for i in closed],
         }
 
-    async def reset(self) -> dict[str, Any]:
+    async def reset(self, full: bool = False) -> dict[str, Any]:
+        """Demo reset. full=True also restores the default Policy and clears guardrail proofs,
+        so every rehearsal / recording take starts clean (an approved guardrail otherwise keeps
+        the attacker host denylisted and the next replay is stopped by policy, not detection)."""
         st = self.state
+        if full:
+            from tripwire.contracts import Policy
+
+            st.policy = Policy(version=st.policy.version + 1)
+            st.proofs.clear()
+            self.emit("metrics", {"source": "checkpoint", "kind": "policy", "policy_version": st.policy.version})
         agents = sorted(set(st.last_ts) | set(st.modes) | st.blocked | set(st.watermarks))
         for a in agents:
             async with st.lock_for(a):
@@ -483,7 +492,7 @@ class Checkpoint:
             self.emit("agent_state", self.agent_state(a))
         # Connected UIs replace their local lists from a fresh snapshot (same shape as on connect).
         self.emit("snapshot", self.snapshot())
-        return {"status": "reset", "agents": agents}
+        return {"status": "reset", "agents": agents, "full": full, "policy_version": st.policy.version}
 
     # ------------------------------------------------------------------ read models
     def status(self) -> StatusResponse:

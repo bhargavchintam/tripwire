@@ -68,6 +68,7 @@ class GuildRunIn(BaseModel):
 
 
 GUILD_DEFAULT_PROMPT = "Run the routine release checks for the tripwire service and report status."
+HEATMAP_CACHE_MS = 30_000
 
 
 class AlertIn(AlertPayload):
@@ -256,8 +257,9 @@ def create_app(
         return svc.get_replay(run_id)
 
     @app.post("/demo/reset", dependencies=auth)
-    async def demo_reset() -> dict[str, Any]:
-        return await svc.reset()
+    async def demo_reset(full: bool = Query(default=False)) -> dict[str, Any]:
+        """?full=1 also restores the default policy + clears proofs (used by the UI's Reset)."""
+        return await svc.reset(full=full)
 
     # ---------------------------------------------------------------- evidence / audit
     @app.get("/evidence", response_model=EvidenceBundle)
@@ -306,12 +308,22 @@ def create_app(
         return await guardrail.approve(svc, incident_id)
 
     # ---------------------------------------------------------------- fleet analytics
+    heatmap_cache: dict[int, tuple[int, dict[str, Any]]] = {}
+
     @app.get("/fleet/heatmap")
     async def fleet_heatmap(hours: int = Query(default=72, ge=1, le=336)) -> dict[str, Any]:
+        # 72 h over ~30M rows takes seconds on Cloud; cache 30 s so the Fleet tab opens instantly.
+        # The original measured query_ms/rows_read are kept and cached_age_ms says it's cached.
+        now = now_ms()
+        hit = heatmap_cache.get(hours)
+        if hit and now - hit[0] < HEATMAP_CACHE_MS:
+            return {**hit[1], "cached_age_ms": now - hit[0]}
         try:
-            return await fleet.heatmap(svc.ch, hours, now_ms())
+            out = await fleet.heatmap(svc.ch, hours, now)
         except CHUnavailable as exc:
             raise _ch_503(exc) from exc
+        heatmap_cache[hours] = (now, out)
+        return {**out, "cached_age_ms": 0}
 
     @app.get("/fleet/top")
     async def fleet_top(
