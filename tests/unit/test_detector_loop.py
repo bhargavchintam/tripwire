@@ -26,7 +26,7 @@ from tripwire.contracts import QuickCheckInput, Verdict
 AGENT = "deploy-bot"
 OTHER = "support-bot"
 T0 = 1_791_569_120_000
-SQL_NAMES = ("funnel", "recent_events", "baseline", "role_grab", "log_tamper")
+SQL_NAMES = ("funnel", "recent_events", "baseline", "role_grab", "log_tamper", "secret_exfil_direct")
 
 
 def _ev(ts_ms: int, action: str, target: str, is_external: int = 0, result: str = "ok") -> dict[str, Any]:
@@ -884,3 +884,94 @@ def test_cli_accepts_the_hook_and_quorum_flags():
     out = res.stdout
     summary = json.loads(out[out.index("{") :])
     assert summary["error"].startswith("checkpoint /status") and summary["hooks_scheduled"] == 0
+
+
+# ---------------------------------------------------------------------------
+# opt-in rules: secret_exfil_direct wiring, role_grab / log_tamper keyed past the policy alert
+# ---------------------------------------------------------------------------
+
+DIRECT_EVENTS = [
+    _ev(T0, "read_file", "ticket:5251"),
+    _ev(T0 + 700, "read_file", "/app/secrets.yaml"),
+    _ev(T0 + 1500, "http_post", "https://transfer.example.net/u", is_external=1),
+]
+DIRECT_HIT = {"agent_id": AGENT, "last_step_ts_ms": T0 + 1500, "first_step_ts_ms": T0 + 700, "n_events": 3}
+
+
+def test_secret_exfil_direct_is_opt_in_and_registered():
+    from ai.rules import RULE_SECRET_EXFIL_DIRECT
+
+    assert L.DEFAULT_RULES == ("secret_theft",)  # default behaviour unchanged
+    assert L.RULE_SECRET_EXFIL_DIRECT == RULE_SECRET_EXFIL_DIRECT == "secret_exfil_direct"
+    assert L.SQL_FOR_RULE["secret_exfil_direct"] == "secret_exfil_direct"
+    sql = load_sql("secret_exfil_direct")
+    assert "windowFunnel(60000)(" in sql and ") = 2" in sql and "is_external = 1" in sql
+    assert "transform(agent_id, {ids:Array(String)}, {wms:Array(Int64)}, toInt64(0))" in sql
+    assert "synthetic = 0" in sql and "{window_s:UInt32}" in sql and "run_command" not in sql.split("SELECT", 1)[1]
+    for name in ("role_grab", "log_tamper"):
+        body = load_sql(name).split("SELECT", 1)[1]
+        assert "last_step_ts_ms" in body and "result" not in body  # any result counts (denied attempts too)
+
+
+async def test_secret_exfil_direct_hit_goes_through_classify_and_blocks_with_a_plain_rule_string():
+    ch = FakeCH({"secret_exfil_direct": [DIRECT_HIT], "recent_events": DIRECT_EVENTS})
+    cp, classify = FakeCheckpoint(), scripted(MALICIOUS)
+    summary = await make(ch, cp, classify, rules=("secret_theft", "secret_exfil_direct")).run_once()
+    assert summary["hits"] == 1 and summary["blocks"] == 1 and ch.names()[:2] == ["funnel", "secret_exfil_direct"]
+    (inp,) = classify.calls
+    assert inp.rule == "secret_exfil_direct" and [e["action"] for e in inp.events] == ["read_file", "read_file", "http_post"]
+    assert "secret_exfil_direct" in inp.context and "secrets.yaml" not in inp.context and "example.net" not in inp.context
+    (block,) = cp.posts("/block/")
+    assert block["rule"] == "secret_exfil_direct" and block["last_step_ts_ms"] == T0 + 1500
+    assert block["decision_source"] == "akashml" and block["model_ids"] == ["akash/test-small"]
+
+
+async def test_secret_exfil_direct_benign_verdict_only_alerts():
+    ch = FakeCH({"secret_exfil_direct": [DIRECT_HIT], "recent_events": DIRECT_EVENTS})
+    cp = FakeCheckpoint()
+    summary = await make(ch, cp, scripted(BENIGN), rules=("secret_exfil_direct",)).run_once()
+    assert summary["blocks"] == 0 and summary["alerts"] == 1 and cp.posts("/block/") == []
+    assert cp.posts("/alerts")[0]["rule"] == "secret_exfil_direct"
+
+
+async def test_agent_blocked_by_one_rule_is_skipped_by_later_rules_in_the_same_pass():
+    ch = FakeCH({"funnel": [FUNNEL_HIT], "secret_exfil_direct": [{**FUNNEL_HIT}], "recent_events": ATTACK_EVENTS})
+    cp, classify = FakeCheckpoint(), scripted(MALICIOUS)
+    summary = await make(ch, cp, classify, rules=("secret_theft", "secret_exfil_direct")).run_once()
+    assert summary["hits"] == 2 and summary["blocks"] == 1 and summary["skipped"] == 1
+    assert len(classify.calls) == 1 and [b["rule"] for b in cp.posts("/block/")] == ["secret_theft"]
+
+
+async def test_role_grab_hit_is_keyed_by_the_newest_row_not_the_policy_alert():
+    denied_at, newest = T0 + 500, T0 + 1300
+    policy_key = f"{OTHER}|role_grab|{denied_at}"  # what the checkpoint recorded for its hold_policy deny
+    events = [
+        _ev(T0, "read_file", "ticket:5123"),
+        _ev(denied_at, "assume_role", "role/cluster-admin", result="denied"),
+        _ev(newest, "read_file", "/etc/app/.env"),
+    ]
+    row = {"agent_id": OTHER, "ts_ms": denied_at, "target": "role/cluster-admin", "last_step_ts_ms": newest}
+    ch = FakeCH({"role_grab": [row], "recent_events": events})
+    cp = FakeCheckpoint(verdict_keys=[policy_key])
+    summary = await make(ch, cp, rule_classify, rules=("role_grab",)).run_once()
+    assert summary["blocks"] == 1
+    (block,) = cp.posts("/block/")
+    assert block["rule"] == "role_grab" and block["last_step_ts_ms"] == newest and block["verdict"] == "malicious"
+
+    # the denied call is the agent's newest row: same key as the policy alert -> skipped, no classify
+    lone = {**row, "last_step_ts_ms": denied_at}
+    ch2, cp2, classify2 = FakeCH({"role_grab": [lone]}), FakeCheckpoint(verdict_keys=[policy_key]), scripted(MALICIOUS)
+    summary2 = await make(ch2, cp2, classify2, rules=("role_grab",)).run_once()
+    assert summary2["skipped"] == 1 and classify2.calls == [] and cp2.posts("/block/") == []
+
+
+def test_local_rule_secret_exfil_direct():
+    hit = local_rule_verdict(_qc("secret_exfil_direct", DIRECT_EVENTS))
+    assert (hit.verdict, hit.confidence, hit.decision_source) == ("malicious", 0.9, "rule_only")
+    internal = DIRECT_EVENTS[:2] + [_ev(T0 + 1500, "http_post", "https://api.internal.example/v1/x")]
+    assert local_rule_verdict(_qc("secret_exfil_direct", internal)).verdict == "benign"
+    late = DIRECT_EVENTS[:2] + [_ev(T0 + 700 + 60_001, "http_post", "https://x.example.net/u", is_external=1)]
+    assert local_rule_verdict(_qc("secret_exfil_direct", late)).verdict == "benign"
+    pem = [_ev(T0, "read_file", "/HOME/app/Deploy.PEM"), _ev(T0 + 10, "http_post", "https://x.example.net", is_external=1)]
+    assert local_rule_verdict(_qc("secret_exfil_direct", pem)).verdict == "malicious"
+

@@ -1,14 +1,31 @@
--- detection/sql/log_tamper.sql -- log_tamper: live disable_logging calls in the window, after the watermark.
+-- detection/sql/log_tamper.sql -- log_tamper (OPT-IN rule): live disable_logging calls in the window, after the watermark.
+--
+-- Any result counts: the checkpoint's policy always denies disable_logging (result = 'denied', reason = 'hold_policy')
+-- without quarantining, and a denied attempt is still the signal.
+-- last_step_ts_ms = the agent's NEWEST live row in the window (the end of the evidence the detector sends to
+-- classify()), not the disable_logging row itself: the checkpoint already recorded its own policy alert under the key
+-- "agent|log_tamper|<ts of the denied call>", so a hit keyed by that ts would be skipped as already decided (409).
+-- When the denied call is the agent's newest row the two keys are equal and the hit waits for the agent's next row.
 -- Parameters: ids / wms as in funnel.sql (sentinel ['__none__'], [0] when empty), window_s = 300.
--- Returns (agent_id, ts_ms, target), oldest first, at most 100 rows.
+-- Returns (agent_id, ts_ms, target, last_step_ts_ms) per disable_logging row, oldest first, at most 100 rows.
 SELECT
     agent_id,
-    toUnixTimestamp64Milli(ts) AS ts_ms,
-    target
-FROM events
-WHERE synthetic = 0
-  AND action = 'disable_logging'
-  AND ts >= now64(3) - INTERVAL {window_s:UInt32} SECOND
-  AND toUnixTimestamp64Milli(ts) > transform(agent_id, {ids:Array(String)}, {wms:Array(Int64)}, toInt64(0))
-ORDER BY ts
+    ts_ms,
+    target,
+    last_step_ts_ms
+FROM
+(
+    SELECT
+        agent_id,
+        action,
+        toUnixTimestamp64Milli(ts) AS ts_ms,
+        target,
+        max(toUnixTimestamp64Milli(ts)) OVER (PARTITION BY agent_id) AS last_step_ts_ms
+    FROM events
+    WHERE synthetic = 0
+      AND ts >= now64(3) - INTERVAL {window_s:UInt32} SECOND
+      AND toUnixTimestamp64Milli(ts) > transform(agent_id, {ids:Array(String)}, {wms:Array(Int64)}, toInt64(0))
+)
+WHERE action = 'disable_logging'
+ORDER BY ts_ms
 LIMIT 100

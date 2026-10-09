@@ -229,3 +229,70 @@ def test_role_grab_and_log_tamper_rows(ch_client, test_agent):
     assert [(r["ts_ms"], r["target"]) for r in tamper if r["agent_id"] == test_agent] == [(base + 100, "cloudtrail")]
     role_wm, _, _ = run(ch_client, "role_grab", **watermark_params({test_agent: base}), window_s=WINDOW_S)
     assert [r for r in role_wm if r["agent_id"] == test_agent] == []
+
+
+# ---------------------------------------------------------------------------
+# secret_exfil_direct.sql (opt-in): secret-looking read -> external http_post within 60 s, no encode step
+# ---------------------------------------------------------------------------
+
+SECRET_YAML = "/app/Secrets.yaml"  # mixed case on purpose: the match is case-insensitive
+
+
+def direct(ch, agent: str, watermarks: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    rows, _, _ = run(ch, "secret_exfil_direct", **watermark_params(watermarks), window_s=WINDOW_S)
+    return [r for r in rows if r["agent_id"] == agent]
+
+
+def test_secret_exfil_direct_hits_without_an_encode_step(ch_client, test_agent):
+    base = now_ms() - 20_000
+    insert(ch_client, test_agent, [
+        (base, "read_file", "ticket:5251", 0, "ok"),
+        (base + 700, "read_file", SECRET_YAML, 0, "ok"),
+        (base + 1500, "http_post", EXT_POST, 1, "denied"),  # a refused send still counts
+    ])
+    t0 = time.perf_counter()
+    rows = direct(ch_client, test_agent)
+    ms = (time.perf_counter() - t0) * 1000
+    assert [(r["first_step_ts_ms"], r["last_step_ts_ms"], r["n_events"]) for r in rows] == [(base + 700, base + 1500, 3)]
+    print(f"\n[measured] secret_exfil_direct.sql: {ms:.1f} ms")
+    assert funnel(ch_client, test_agent) == []  # the default secret_theft funnel still needs the base64 step
+
+
+def test_secret_exfil_direct_internal_post_late_post_or_post_first_no_hit(ch_client, test_agent):
+    base = now_ms() - 120_000
+    insert(ch_client, test_agent, [
+        (base, "read_file", "/etc/app/credentials", 0, "ok"),
+        (base + 800, "http_post", INT_POST, 0, "ok"),  # internal: start-up config + internal post is benign
+        (base + 61_000, "http_post", EXT_POST, 1, "ok"),  # external but 61 s after the read
+        (base + 70_000, "http_post", EXT_POST, 1, "ok"),  # external post BEFORE the next secret read
+        (base + 70_500, "read_file", "/app/.env", 0, "ok"),
+        (base + 71_000, "read_file", "/app/config.yml", 0, "ok"),  # not secret-looking
+    ])
+    assert direct(ch_client, test_agent) == []
+
+
+def test_secret_exfil_direct_respects_the_watermark(ch_client, test_agent):
+    base = now_ms() - 20_000
+    insert(ch_client, test_agent, [(base, "read_file", ENV, 0, "ok"), (base + 900, "http_post", EXT_POST, 1, "ok")])
+    assert len(direct(ch_client, test_agent)) == 1
+    assert direct(ch_client, test_agent, {test_agent: base}) == []  # the read is history: no chain after it
+    assert direct(ch_client, test_agent, {test_agent: base + 900}) == []
+
+
+def test_role_grab_and_log_tamper_match_denied_rows_keyed_by_the_newest_row(ch_client, test_agent):
+    base = now_ms() - 20_000
+    insert(ch_client, test_agent, [
+        (base, "read_file", "ticket:5123", 0, "ok"),
+        (base + 600, "assume_role", "role/cluster-admin", 0, "denied"),
+        (base + 900, "disable_logging", "cloudtrail:prod-trail", 0, "denied"),
+        (base + 1400, "read_file", ENV, 0, "ok"),
+    ])
+    role, _, _ = run(ch_client, "role_grab", **watermark_params({}), window_s=WINDOW_S)
+    tamper, _, _ = run(ch_client, "log_tamper", **watermark_params({}), window_s=WINDOW_S)
+    mine = [(r["ts_ms"], r["target"], r["last_step_ts_ms"]) for r in role if r["agent_id"] == test_agent]
+    assert mine == [(base + 600, "role/cluster-admin", base + 1400)]
+    mine = [(r["ts_ms"], r["last_step_ts_ms"]) for r in tamper if r["agent_id"] == test_agent]
+    assert mine == [(base + 900, base + 1400)]
+    after, _, _ = run(ch_client, "role_grab", **watermark_params({test_agent: base + 600}), window_s=WINDOW_S)
+    assert [r for r in after if r["agent_id"] == test_agent] == []
+

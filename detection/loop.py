@@ -11,6 +11,7 @@ Run from the repo root:
     uv run python -m detection.loop                                  # forever, every 1 s
     uv run python -m detection.loop --once                           # one iteration, JSON summary; exit 1 on error
     uv run python -m detection.loop --rules secret_theft,baseline_novelty,role_grab,log_tamper
+    uv run python -m detection.loop --rules secret_theft,secret_exfil_direct,role_grab,log_tamper,baseline_novelty
     uv run python -m detection.loop --interval 1.0 --threshold 0.8 --window-s 300 --checkpoint-url http://localhost:8000
     uv run python -m detection.loop --no-outbreak --no-investigator     # containment only, no post-block hooks
     uv run python -m detection.loop --quorum                            # two-model quorum (ai.quorum) when importable
@@ -22,6 +23,15 @@ report with SQL receipts). Incidents the checkpoint contained on its own (hold m
 same hooks from the open-incident sweep. Hooks never block or crash the loop; they are counted in the summary
 and heartbeat (outbreaks, reports, hook_errors) and awaited on shutdown. The in-process run_once(client) and a
 bare Detector(ch, cp, classify) keep the hooks OFF (the CLI turns them on; pass outbreak=True / investigator=True).
+
+Rules: secret_theft is the default (DEFAULT_RULES). The others are opt-in via --rules: baseline_novelty,
+role_grab, log_tamper and secret_exfil_direct (a secret-looking read_file followed within 60 s by an external
+http_post, no encode step needed; detection/sql/secret_exfil_direct.sql). Every hit goes through classify(); the
+detector blocks only on malicious >= threshold. role_grab / log_tamper match denied attempts too (the checkpoint's
+policy always denies assume_role / disable_logging without quarantining and records its own alert keyed by the
+denied call's ts), so their hits are keyed by the agent's newest live row (the end of the evidence window), not by
+the denied call itself. When the denied call is the agent's newest row the key is the policy's own and the hit is
+skipped until the agent acts again. Once an agent is blocked in a pass, the later rules of that pass skip it.
 
 Honesty: decision_source is whatever classify() returned ('akashml' only when a model answered, 'quorum' only
 when ai.quorum had two models agree); every fallback decision made here is labelled rule_only and its reason
@@ -58,13 +68,23 @@ from tripwire.contracts import (
     Verdict,
 )
 
+# Opt-in rule; tripwire/contracts.py (frozen) has no constant for it. AlertPayload.rule is a plain str and the
+# checkpoint tags incidents with RULE_TAGS.get(rule, []), so an unknown rule name is accepted (no tags).
+# Same string as ai.rules.RULE_SECRET_EXFIL_DIRECT (kept local so the rule fallback below needs no ai import).
+RULE_SECRET_EXFIL_DIRECT = "secret_exfil_direct"
+
 SQL_FOR_RULE: dict[str, str] = {
     RULE_SECRET_THEFT: "funnel",
     RULE_BASELINE: "baseline",
     RULE_ROLE_GRAB: "role_grab",
     RULE_LOG_TAMPER: "log_tamper",
+    RULE_SECRET_EXFIL_DIRECT: "secret_exfil_direct",
 }
 DEFAULT_RULES: tuple[str, ...] = (RULE_SECRET_THEFT,)
+# Rules whose SQL already returns one row per agent with last_step_ts_ms / first_step_ts_ms / n_events (funnels).
+FUNNEL_RULES: tuple[str, ...] = (RULE_SECRET_THEFT, RULE_SECRET_EXFIL_DIRECT)
+SECRET_SUBSTRINGS: tuple[str, ...] = (".env", "secret", "credential", "id_rsa")  # mirrors ai.rules
+SECRET_SUFFIXES: tuple[str, ...] = (".pem",)
 CLASSIFY_TIMEOUT_S = 3.5
 RULE_WINDOW_MS = 60_000
 SEEN_MAX = 5000
@@ -115,11 +135,24 @@ def _secret_theft_chain(events: list[dict[str, Any]], need_post: bool) -> bool:
     return False
 
 
+def _is_secret_path(target: Any) -> bool:
+    t = str(target or "").lower()
+    return any(x in t for x in SECRET_SUBSTRINGS) or t.endswith(SECRET_SUFFIXES)
+
+
+def _direct_exfil(events: list[dict[str, Any]]) -> bool:
+    reads = [_ts(e) for e in events if e.get("action") == "read_file" and _is_secret_path(e.get("target"))]
+    posts = [_ts(e) for e in events if e.get("action") == "http_post" and _int(e.get("is_external")) == 1]
+    return any(0 < t2 - t1 <= RULE_WINDOW_MS for t1 in reads for t2 in posts)
+
+
 def local_rule_verdict(inp: QuickCheckInput) -> Verdict:
     """Pure, deterministic verdict (decision_source rule_only). Mirrors the frozen ai.rules.rule_verdict:
     secret_theft/hold: malicious 0.9 iff read_file(.env) -> run_command(base64) within 60 s
     (secret_theft also needs an external http_post after it); baseline_novelty -> uncertain 0.5;
-    role_grab -> malicious 0.85 iff an assume_role is present; log_tamper -> same for disable_logging."""
+    role_grab -> malicious 0.85 iff an assume_role is present; log_tamper -> same for disable_logging;
+    secret_exfil_direct -> malicious 0.9 iff a secret-looking read_file is followed within 60 s by an external
+    http_post."""
     events = sorted((e for e in inp.events if isinstance(e, dict)), key=_ts)
     rule = inp.rule
     if rule in (RULE_SECRET_THEFT, RULE_HOLD):
@@ -149,6 +182,20 @@ def local_rule_verdict(inp: QuickCheckInput) -> Verdict:
                 verdict="malicious", confidence=0.85, reason=f"rule: {action} present", decision_source="rule_only"
             )
         return Verdict(verdict="benign", confidence=0.5, reason=f"rule: no {action}", decision_source="rule_only")
+    if rule == RULE_SECRET_EXFIL_DIRECT:
+        if _direct_exfil(events):
+            return Verdict(
+                verdict="malicious",
+                confidence=0.9,
+                reason="rule: secret-looking read_file followed within 60 s by an external http_post",
+                decision_source="rule_only",
+            )
+        return Verdict(
+            verdict="benign",
+            confidence=0.5,
+            reason="rule: no secret read -> external http_post within 60 s",
+            decision_source="rule_only",
+        )
     return Verdict(verdict="benign", confidence=0.5, reason=f"rule: unknown rule {rule!r}", decision_source="rule_only")
 
 
@@ -430,19 +477,21 @@ class Detector:
     @staticmethod
     def _hits_for(rule: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Funnel rows are one per agent already; the other rules collapse to one hit per agent
-        (the newest row) so a burst of novel rows costs one classify call, not one per row."""
-        if rule == RULE_SECRET_THEFT:
+        (the newest row) so a burst of novel rows costs one classify call, not one per row. A row that carries
+        its own last_step_ts_ms (role_grab / log_tamper: the agent's newest live row) is keyed by that."""
+        if rule in FUNNEL_RULES:
             return [r for r in rows if r.get("agent_id")]
         per_agent: dict[str, dict[str, Any]] = {}
         for r in rows:
             agent = r.get("agent_id")
             if not agent:
                 continue
+            step = _int(r.get("last_step_ts_ms", r.get("ts_ms")))
             cur = per_agent.get(agent)
             if cur is None:
-                per_agent[agent] = {**r, "last_step_ts_ms": _int(r.get("ts_ms")), "n_rows": 1, "targets": [r.get("target")]}
+                per_agent[agent] = {**r, "last_step_ts_ms": step, "n_rows": 1, "targets": [r.get("target")]}
             else:
-                cur["last_step_ts_ms"] = max(cur["last_step_ts_ms"], _int(r.get("ts_ms")))
+                cur["last_step_ts_ms"] = max(cur["last_step_ts_ms"], step)
                 cur["n_rows"] += 1
                 cur["targets"].append(r.get("target"))
         return list(per_agent.values())
@@ -453,6 +502,13 @@ class Detector:
             return (
                 "Tripwire detector; funnel matched: read_file(.env) -> run_command(base64) -> external http_post "
                 f"within 60 s (first_step_ts_ms={hit.get('first_step_ts_ms')}, "
+                f"last_step_ts_ms={hit.get('last_step_ts_ms')}, n_events={hit.get('n_events')})"
+            )
+        if rule == RULE_SECRET_EXFIL_DIRECT:
+            return (
+                "Tripwire detector; rule secret_exfil_direct matched: read_file of a secret-looking path -> external "
+                "http_post within 60 s, no encode step required "
+                f"(first_step_ts_ms={hit.get('first_step_ts_ms')}, "
                 f"last_step_ts_ms={hit.get('last_step_ts_ms')}, n_events={hit.get('n_events')})"
             )
         # Raw targets are agent-chosen text: they reach the model only inside the fenced events JSON
@@ -549,6 +605,8 @@ class Detector:
             return
         else:
             summary["blocks" if blocking else "alerts"] += 1
+            if blocking:
+                view.blocked.add(agent)  # later rules in this pass skip the agent (one block, one classify)
             self._throttle.clear("checkpoint_post")
             logger.info(
                 f"detector: {what.upper()} {agent} rule={rule} verdict={payload.verdict} "
@@ -946,7 +1004,10 @@ def main(
         False, "--once", help="run one iteration, print the JSON summary; exit 0, or 1 when it reports an error"
     ),
     rules: str = typer.Option(
-        ",".join(DEFAULT_RULES), "--rules", help="comma-separated: secret_theft,baseline_novelty,role_grab,log_tamper"
+        ",".join(DEFAULT_RULES),
+        "--rules",
+        help="comma-separated: secret_theft,baseline_novelty,role_grab,log_tamper,secret_exfil_direct "
+        "(default secret_theft; the others are opt-in)",
     ),
     threshold: float = typer.Option(0.8, "--threshold", help="block when malicious and confidence >= threshold (0..1)"),
     window_s: int = typer.Option(300, "--window-s", help="lookback window in seconds (> 0)"),

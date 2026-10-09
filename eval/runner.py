@@ -8,6 +8,9 @@ source "eval") so the Evidence tab and /evidence show them (master §10 D6, §14
     uv run python -m eval.runner --no-heartbeat --limit 3           # smoke run: nothing pushed to /evidence
     uv run python -m eval.runner --no-detect                        # rely on the detector already running (make dev)
     uv run python -m eval.runner --restore                          # POST /restore for every eval agent afterwards
+    uv run python -m eval.runner --rules secret_theft,secret_exfil_direct,role_grab,log_tamper,baseline_novelty
+                                                                    # in-process detector rules (default: the
+                                                                    # detector's DEFAULT_RULES, i.e. secret_theft)
 
 Cases: fixtures/eval/attack/*.json and fixtures/eval/benign/*.json (contracts.Scenario; the directory is the
 label). New files are picked up on the next run, no code change needed. When NO labelled case exists the three
@@ -225,6 +228,7 @@ class EvalResult:
     checkpoint_url: str = ""
     hold_enabled: Optional[bool] = None
     detector: str = ""
+    rules: list[str] = field(default_factory=list)  # in-process detector rules ([] = detection.loop.DEFAULT_RULES)
     fallback_note: Optional[str] = None
     skipped_files: list[str] = field(default_factory=list)
     cases: list[CaseResult] = field(default_factory=list)
@@ -346,17 +350,32 @@ class CHVisibility:
                 pass
 
 
-def make_detector(token: str) -> DetectFn:
+def make_detector(token: str, rules: tuple[str, ...] | list[str] | None = None) -> DetectFn:
     """detection.loop.run_once(client) through the eval's own httpx client (never CHECKPOINT_URL directly),
     hooks off, bounded by DETECT_TIMEOUT_S. Imported lazily so the eval still runs when the detector lane
-    is mid-edit (the pass then reports an error instead of raising)."""
+    is mid-edit (the pass then reports an error instead of raising). `rules` (opt-in, e.g. --rules) is passed
+    to run_once(rules=...); None or empty keeps the detector's DEFAULT_RULES."""
+    extra: dict[str, Any] = {"rules": tuple(rules)} if rules else {}
 
     async def detect(http: httpx.AsyncClient) -> dict[str, Any]:
         from detection.loop import run_once
 
-        return await asyncio.wait_for(run_once(http, token=token), DETECT_TIMEOUT_S)
+        return await asyncio.wait_for(run_once(http, token=token, **extra), DETECT_TIMEOUT_S)
 
     return detect
+
+
+def parse_rules(text: str) -> tuple[str, ...]:
+    """'a, b,,c' -> ('a', 'b', 'c'); ValueError for a rule detection.loop does not know."""
+    rules = tuple(r.strip() for r in (text or "").split(",") if r.strip())
+    if not rules:
+        return ()
+    from detection.loop import SQL_FOR_RULE
+
+    unknown = [r for r in rules if r not in SQL_FOR_RULE]
+    if unknown:
+        raise ValueError(f"unknown rules {unknown}; known: {sorted(SQL_FOR_RULE)}")
+    return rules
 
 
 def _is_external(action: str, target: str) -> int:
@@ -880,6 +899,7 @@ def heartbeat_payload(result: EvalResult) -> Heartbeat:
         "prevented_not_quarantined": result.prevented_not_quarantined,
         "hold_enabled": result.hold_enabled,
         "detector": result.detector,
+        "rules": result.rules,
         "prices": result.prices,
         "run_id": result.run_id,
         "started_utc": result.started_utc,
@@ -929,6 +949,7 @@ def render_markdown(result: EvalResult) -> str:
         ["quick checks performed", f"{result.n_quick_checks} ({result.n_model_calls} answered by a model)"],
         ["hold mode during the run", _fmt(result.hold_enabled)],
         ["detector", result.detector],
+        ["detector rules", ", ".join(result.rules) if result.rules else "default (detection.loop.DEFAULT_RULES)"],
         ["duration", f"{result.duration_s:.1f} s"],
     ]
     cost_rows = [
@@ -1074,6 +1095,7 @@ async def _amain(
     heartbeat: bool,
     detect: bool,
     restore: bool,
+    rules: tuple[str, ...] = (),
 ) -> tuple[EvalResult, str]:
     cp = CheckpointClient(base_url=url, token=token, timeout=HTTP_TIMEOUT_S)
     http = httpx.AsyncClient(base_url=url, headers={"X-Tripwire-Token": token}, timeout=HTTP_TIMEOUT_S)
@@ -1085,12 +1107,16 @@ async def _amain(
             cp=cp,
             http=http,
             visible=vis.count,
-            detect=make_detector(token) if detect else None,
+            detect=make_detector(token, rules) if detect else None,
             max_parallel=max_parallel,
             wait_s=wait_s,
             note=cs.note,
             skipped=cs.skipped,
+            detector_label=(
+                f"detection.loop.run_once (in-process, rules={','.join(rules)})" if detect and rules else ""
+            ),
         )
+        result.rules = list(rules) if detect else []
         if vis.errors and vis.errors >= len(cs.cases):
             result.errors.append("ClickHouse visibility check never succeeded (see the log); detector path unverified")
         hb_status = "skipped (--no-heartbeat)"
@@ -1132,10 +1158,24 @@ def main(
     limit: Annotated[int, typer.Option("--limit", min=0, help="run only the first N cases (0 = all)")] = 0,
     restore: Annotated[bool, typer.Option("--restore", help="POST /restore for every eval agent afterwards")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="print the full result as JSON instead of the table")] = False,
+    rules: Annotated[
+        str,
+        typer.Option(
+            "--rules",
+            help="comma-separated detector rules for the in-process passes, e.g. "
+            "secret_theft,secret_exfil_direct,role_grab,log_tamper,baseline_novelty (default: the detector's "
+            "DEFAULT_RULES = secret_theft)",
+        ),
+    ] = "",
 ) -> None:
     """Run the evaluation against the checkpoint in .env (never POST /demo/reset). Exit 0 when it ran, 2 otherwise."""
     s = get_settings()
     url = (checkpoint_url or s.checkpoint_url).rstrip("/")
+    try:
+        rule_list = parse_rules(rules)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
     cs = load_cases(cases)
     for msg in cs.skipped:
         logger.warning(f"eval: skipped {msg}")
@@ -1146,10 +1186,23 @@ def main(
         raise typer.Exit(2)
     if limit:
         cs.cases = cs.cases[:limit]
-    logger.info(f"eval: {len(cs.cases)} case(s) against {url} (max_parallel={max_parallel}, wait_s={wait_s:g}, detect={detect})")
+    logger.info(
+        f"eval: {len(cs.cases)} case(s) against {url} (max_parallel={max_parallel}, wait_s={wait_s:g}, detect={detect}, "
+        f"rules={','.join(rule_list) or 'default'})"
+    )
     try:
         result, hb_status = asyncio.run(
-            _amain(cs, url, s.tripwire_token, max_parallel=max_parallel, wait_s=wait_s, heartbeat=heartbeat, detect=detect, restore=restore)
+            _amain(
+                cs,
+                url,
+                s.tripwire_token,
+                max_parallel=max_parallel,
+                wait_s=wait_s,
+                heartbeat=heartbeat,
+                detect=detect,
+                restore=restore,
+                rules=rule_list,
+            )
         )
     except CheckpointDown as exc:
         typer.echo(f"checkpoint unreachable at {url}: {exc}", err=True)

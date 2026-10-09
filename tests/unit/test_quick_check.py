@@ -358,3 +358,37 @@ async def test_classify_uses_akashml_when_key_present(monkeypatch):
     assert classify_source() == f"akashml:{MODEL}"
     assert len(app.state.calls) == 1 and app.state.model_calls == 0  # model from settings: no discovery
     assert await qc.warmup() == f"akashml:{MODEL}"
+
+
+# ---------------------------------------------------------------- opt-in rule secret_exfil_direct + denied attempts
+def test_rule_secret_exfil_direct_and_denied_privilege_attempts():
+    from ai.rules import RULE_SECRET_EXFIL_DIRECT, is_secret_path
+
+    assert RULE_SECRET_EXFIL_DIRECT == "secret_exfil_direct"
+    for t in ("/app/.env.production", "/etc/app/credentials", "/app/Secrets.yaml", "~/.ssh/id_rsa", "/k/tls.pem"):
+        assert is_secret_path(t), t
+    for t in ("/app/config.yml", "/var/log/app.log", "ticket:5251", "/app/key.pem.bak"):
+        assert not is_secret_path(t), t
+
+    direct = [
+        ev(0, "read_file", "ticket:5251"),
+        ev(700, "read_file", "/app/secrets.yaml"),
+        ev(1500, "http_post", "https://transfer.example.net/u", is_external=1),
+    ]
+    v = rule_verdict(inp(direct, rule="secret_exfil_direct"))
+    assert v.verdict == "malicious" and v.confidence == 0.9 and v.decision_source == "rule_only"
+    assert v.reason.startswith("rule: ") and "no encode step" in v.reason
+    internal = direct[:2] + [ev(1500, "http_post", "https://api.internal.example/v1/x", is_external=0)]
+    assert rule_verdict(inp(internal, rule="secret_exfil_direct")).verdict == "benign"
+    post_first = [direct[2], ev(2000, "read_file", "/app/.env")]
+    assert rule_verdict(inp(post_first, rule="secret_exfil_direct")).verdict == "benign"
+    late = direct[:2] + [ev(700 + 60_001, "http_post", "https://transfer.example.net/u", is_external=1)]
+    assert rule_verdict(inp(late, rule="secret_exfil_direct")).verdict == "benign"
+    # the default secret_theft rule is unchanged: no encode step -> benign
+    assert rule_verdict(inp(direct)).verdict == "benign"
+
+    denied = ev(1, "assume_role", "role/cluster-admin", result="denied", reason="hold_policy")
+    assert rule_verdict(inp([denied], rule="role_grab")).verdict == "malicious"
+    tamper = ev(1, "disable_logging", "cloudtrail:prod-trail", result="denied", reason="hold_policy")
+    assert rule_verdict(inp([tamper], rule="log_tamper")).confidence == 0.85
+
