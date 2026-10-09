@@ -179,7 +179,10 @@ async def test_honeytoken_payload_denied_incident_quarantine_never_stored(client
     for blob in blobs:
         assert "please-do-not-store-me" not in blob and TOKENS[0] not in blob
     ev = (await client.get("/evidence")).json()
-    assert ev["time_to_contain_ms"] is not None and ev["time_to_contain_ms"] >= 0
+    # H: honeytoken trips are excluded from time_to_contain_ms and reported as their own receipt.
+    assert ev["time_to_contain_ms"] is None
+    hc = [r for r in ev["receipts"] if r.get("kind") == "honeytoken_contain"]
+    assert len(hc) == 1 and hc[0]["n"] == 1 and hc[0]["ms"] >= 0
 
 
 async def test_honeytoken_base64_in_http_get_target(client):
@@ -262,10 +265,9 @@ async def test_report_and_outbreak(client):
     assert incs[0]["outbreak"]["source_id"] == "ticket:4821"
 
 
-async def test_phase2_stubs_501(client):
-    for path in ("/policy/backtest", "/guardrail/x/prove", "/guardrail/x/approve", "/guild/run"):
-        r = await client.post(path, json={})
-        assert r.status_code == 501 and r.json() == {"detail": "phase 2"}, path
+async def test_guild_run_503_when_not_configured(client):
+    r = await client.post("/guild/run", json={})
+    assert r.status_code == 503 and r.json() == {"detail": "guild trigger not configured"}
 
 
 async def test_policy_copilot_503_until_ai_copilot_exists(client, monkeypatch):

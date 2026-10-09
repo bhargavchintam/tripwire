@@ -8,7 +8,7 @@ const target = process.env.VITE_MOCK === "1" ? "http://localhost:8001" : "http:/
 
 const API_PATHS = [
   "tool", "health", "status", "block", "alerts", "restore", "stream", "heartbeat", "config",
-  "policy", "incidents", "guardrail", "audit", "evidence", "demo", "guild",
+  "policy", "incidents", "guardrail", "audit", "evidence", "demo", "guild", "fleet",
 ];
 
 // Regex keys match the path segment exactly (so "/tool" never catches "/tooltip.tsx").

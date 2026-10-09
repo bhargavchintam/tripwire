@@ -32,6 +32,8 @@ INCIDENT_STEPS_MAX = 200
 VERDICT_KEYS_MAX = 10_000
 SAMPLES_MAX = 1000
 TIMING_SAMPLES_MAX = 2000
+HOLD_RECEIPTS_MAX = 50
+PROOFS_MAX = 200
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATE_PATH = ROOT / "var" / "state.json"
@@ -61,6 +63,13 @@ class State:
         self.ttd_samples: collections.deque[float] = collections.deque(maxlen=SAMPLES_MAX)
         self.ttc_samples: collections.deque[float] = collections.deque(maxlen=SAMPLES_MAX)
         self.hold_samples: collections.deque[float] = collections.deque(maxlen=SAMPLES_MAX)
+        # Honeytoken trips are contained with no detector/model in the loop; reported separately.
+        self.honey_ttc_samples: collections.deque[float] = collections.deque(maxlen=SAMPLES_MAX)
+        self.hold_receipts: collections.deque[dict[str, Any]] = collections.deque(maxlen=HOLD_RECEIPTS_MAX)
+        # incident_id -> GuardrailProof dict (+ approved_ms once approved)
+        self.proofs: dict[str, dict[str, Any]] = {}
+        # Agents with hold forced on regardless of hold_enabled (guardrail verify sandboxes). Not persisted.
+        self.hold_forced: set[str] = set()
         self.load_error: str | None = None
         self.locks: dict[str, asyncio.Lock] = {}
         self.dirty = False
@@ -132,6 +141,15 @@ class State:
             else:
                 logger.warning("state: >INCIDENTS_MAX open incidents; keeping all of them")
 
+    def add_proof(self, incident_id: str, proof: dict[str, Any]) -> None:
+        self.proofs.pop(incident_id, None)
+        self.proofs[incident_id] = proof
+        while len(self.proofs) > PROOFS_MAX:
+            self.proofs.pop(next(iter(self.proofs)))
+
+    def hold_on(self, agent_id: str) -> bool:
+        return self.hold_enabled or agent_id in self.hold_forced
+
     def timing(self, source: str) -> collections.deque[float]:
         d = self.timing_samples.get(source)
         if d is None:
@@ -160,6 +178,9 @@ class State:
             "ttd_samples": list(self.ttd_samples),
             "ttc_samples": list(self.ttc_samples),
             "hold_samples": list(self.hold_samples),
+            "honey_ttc_samples": list(self.honey_ttc_samples),
+            "hold_receipts": list(self.hold_receipts),
+            "proofs": self.proofs,
         }
 
     def to_json(self) -> str:
@@ -190,6 +211,9 @@ class State:
         self.ttd_samples = collections.deque(d.get("ttd_samples", []), maxlen=SAMPLES_MAX)
         self.ttc_samples = collections.deque(d.get("ttc_samples", []), maxlen=SAMPLES_MAX)
         self.hold_samples = collections.deque(d.get("hold_samples", []), maxlen=SAMPLES_MAX)
+        self.honey_ttc_samples = collections.deque(d.get("honey_ttc_samples", []), maxlen=SAMPLES_MAX)
+        self.hold_receipts = collections.deque(d.get("hold_receipts", []), maxlen=HOLD_RECEIPTS_MAX)
+        self.proofs = dict(d.get("proofs", {}))
 
     def load(self) -> bool:
         """Load from self.path. True if a state file was applied."""

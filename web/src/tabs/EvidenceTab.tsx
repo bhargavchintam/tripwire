@@ -14,8 +14,8 @@ const ROWS: Row[] = [
   { key: "query_p50_ms", label: "Detection query p50", fmt: fmtMs as Row["fmt"], source: "detector heartbeat query_timings_ms (nearest rank)" },
   { key: "query_p95_ms", label: "Detection query p95", fmt: fmtMs as Row["fmt"], source: "detector heartbeat query_timings_ms (nearest rank)" },
   { key: "time_to_detect_ms", label: "Time to detect", fmt: fmtMs as Row["fmt"], source: "median of block alerts: detected_at_ms − last_step_ts_ms" },
-  { key: "time_to_contain_ms", label: "Time to contain", fmt: fmtMs as Row["fmt"], source: "median: block received − detected_at_ms; honeytoken: quarantine − step ts" },
-  { key: "hold_decision_ms", label: "Hold decision latency", fmt: fmtMs as Row["fmt"], source: "median checkpoint hold decide() time (verdict calls only)" },
+  { key: "time_to_contain_ms", label: "Time to contain", fmt: fmtMs as Row["fmt"], source: "median of detector + hold containment samples only (honeytoken trips reported separately as receipt kind honeytoken_contain)" },
+  { key: "hold_decision_ms", label: "Hold decision latency", fmt: fmtMs as Row["fmt"], source: "median wall time of the whole hold decision (hold samples)" },
   { key: "precision", label: "Precision", fmt: fmtPct as Row["fmt"], source: "eval runner over labelled cases" },
   { key: "recall", label: "Recall", fmt: fmtPct as Row["fmt"], source: "eval runner over labelled cases" },
   { key: "n_cases", label: "Eval cases (n)", fmt: fmtInt as Row["fmt"], source: "fixtures/eval attack + benign" },
@@ -138,3 +138,5 @@ export function EvidenceTab() {
     </div>
   );
 }
+
+export default EvidenceTab;

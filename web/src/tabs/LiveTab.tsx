@@ -5,11 +5,15 @@ import { AgentCard } from "../components/AgentCard";
 import { AttackChain } from "../components/AttackChain";
 import { EventTable } from "../components/EventTable";
 import { IncidentFeed, sortedIncidents } from "../components/IncidentFeed";
+import { OutbreakPanel } from "../components/OutbreakPanel";
 import { LIVE_AGENTS } from "../lib/types";
-import { useTripwire } from "../hooks/useTripwire";
+import { isLiveAgent, useTripwire } from "../hooks/useTripwire";
+import { usePresenter } from "../hooks/usePresenter";
 
 export function agentIds(modes: Record<string, unknown>, stats: Record<string, unknown>): string[] {
-  const extra = [...new Set([...Object.keys(modes), ...Object.keys(stats)])].filter((a) => a.startsWith("guild:")).sort();
+  const extra = [...new Set([...Object.keys(modes), ...Object.keys(stats)])]
+    .filter((a) => a.startsWith("guild:") && isLiveAgent(a))
+    .sort();
   return [...LIVE_AGENTS, ...extra];
 }
 
@@ -23,6 +27,7 @@ export function LiveTab({
   onReset: () => void;
 }) {
   const { state } = useTripwire();
+  const presenter = usePresenter().on;
   const latest = sortedIncidents(state.incidents)[0];
   const ids = agentIds(state.modes, state.stats);
   return (
@@ -36,9 +41,11 @@ export function LiveTab({
         <Button variant="outline" size="lg" onClick={onReset}>
           <RotateCcw /> Reset demo <kbd className="ml-1 rounded bg-black/25 px-1.5 font-mono text-xs">0</kbd>
         </Button>
-        <span className="ml-auto hidden font-mono text-xs text-dim lg:inline">
-          shortcuts: R replay · X restore last quarantined · H hold · 0 reset
-        </span>
+        {!presenter && (
+          <span className="ml-auto hidden font-mono text-xs text-dim lg:inline">
+            shortcuts: R replay · X restore last quarantined · H hold · P presenter · 0 reset
+          </span>
+        )}
       </div>
 
       <div className={`grid gap-4 ${ids.length > 2 ? "lg:grid-cols-3" : "md:grid-cols-2"}`}>
@@ -49,10 +56,15 @@ export function LiveTab({
 
       <AttackChain incident={latest} mode={latest ? state.modes[latest.agent_id] : undefined} />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-        <EventTable />
-        <IncidentFeed onOpen={onOpenIncident} />
-      </div>
+      {/* Presenter mode keeps the outbreak flow only once there is one (demo act 3). */}
+      <OutbreakPanel hideWhenEmpty={presenter} />
+
+      {!presenter && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+          <EventTable />
+          <IncidentFeed onOpen={onOpenIncident} />
+        </div>
+      )}
     </div>
   );
 }

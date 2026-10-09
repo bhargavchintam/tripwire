@@ -47,3 +47,13 @@ body {
 .md th { @apply bg-panel-2; }
 .md blockquote { @apply border-l-2 border-held pl-3 text-muted text-sm; }
 .md strong { @apply text-fg; }
+
+/* Presenter mode (P): everything sized in rem grows ~125% for the projector. */
+html.presenter { font-size: 125%; }
+
+/* HELD: amber pulse while a hold decision is shown, before the DENIED stamp lands. */
+@keyframes held-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(245 158 11 / 0.7); }
+  50% { box-shadow: 0 0 0 12px rgb(245 158 11 / 0); }
+}
+.animate-held { animation: held-pulse 0.7s ease-in-out infinite; }

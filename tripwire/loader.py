@@ -15,7 +15,6 @@ import json
 import re
 import secrets
 import time
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -79,11 +78,21 @@ def ping_url() -> str:
     return f"{'https' if s.clickhouse_secure else 'http'}://{s.clickhouse_host}:{s.clickhouse_port}/ping"
 
 
-def clickhouse_reachable(timeout: float = 2.0) -> bool:
-    """Same check as `curl -sf localhost:8123/ping`, against the configured host/port."""
+def clickhouse_reachable(timeout: float = 5.0) -> bool:
+    """Authenticated reachability check against the configured host/port.
+
+    Not an anonymous GET /ping: ClickHouse Cloud's proxy resets unauthenticated /ping
+    requests (seen 11:20), so that check falsely reported Cloud as down. A real client
+    round-trip (`SELECT 1`, no default database) works for local Docker and Cloud alike.
+    """
     try:
-        with urllib.request.urlopen(ping_url(), timeout=timeout) as resp:
-            return resp.status == 200
+        import clickhouse_connect
+
+        from tripwire.ch import _kwargs
+
+        kw = _kwargs(database="")
+        kw["connect_timeout"] = timeout
+        return clickhouse_connect.get_client(**kw).command("SELECT 1") == 1
     except Exception:
         return False
 

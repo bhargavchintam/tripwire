@@ -10,20 +10,22 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from loguru import logger
 
 from checkpoint import hold, honeytoken
 from checkpoint.audit import chain_hash, verify_chain
 from checkpoint.bus import Bus
-from checkpoint.chread import CHReader
+from checkpoint.chread import CHReader, hold_history
+from checkpoint.policy import HTTP_ACTIONS, host_of
+from checkpoint.policy import is_external as _is_external
 from checkpoint.state import INCIDENT_STEPS_MAX, State, now_ms
 from checkpoint.writer import Writer
 from tripwire.contracts import (
     RULE_HONEYTOKEN,
     RULE_TAGS,
     AlertPayload,
+    ClassifyFn,
     EvidenceBundle,
     Heartbeat,
     Incident,
@@ -42,7 +44,8 @@ from tripwire.contracts import (
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = ROOT / "fixtures"
-HTTP_ACTIONS = ("http_post", "http_get")
+__all__ = ["Checkpoint", "Conflict", "NotFound", "host_of", "HTTP_ACTIONS", "FIXTURES_DIR"]
+_DEFAULT = object()
 REPLAY_BLOCK_WAIT_S = 10.0
 REPLAYS_MAX = 50
 _SCENARIO_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -57,17 +60,6 @@ class Conflict(Exception):
 
 class NotFound(Exception):
     pass
-
-
-def host_of(target: str) -> str:
-    t = (target or "").strip()
-    if not t:
-        return ""
-    try:
-        parts = urlsplit(t if "://" in t else "//" + t)
-        return (parts.hostname or "").lower()
-    except ValueError:
-        return ""
 
 
 def _median(xs: Any) -> float | None:
@@ -101,6 +93,8 @@ class Checkpoint:
         ch: CHReader,
         honeytokens: list[str],
         fixtures_dir: Path = FIXTURES_DIR,
+        history_lookup: Any = _DEFAULT,
+        classify: ClassifyFn | None = None,
     ) -> None:
         self.writer = writer
         self.state = state
@@ -110,6 +104,19 @@ class Checkpoint:
         self.fixtures_dir = fixtures_dir
         self.replays: dict[str, dict[str, Any]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Hold-mode seams (tests inject fakes; None classify = hold.get_classify() at call time,
+        # so ai.quick_check is picked up automatically when it lands).
+        if history_lookup is _DEFAULT:
+            history_lookup = self._ch_history if ch.enabled else None
+        self.history_lookup: hold.HistoryLookup | None = history_lookup
+        self.classify_override: ClassifyFn | None = classify
+        self.hold_cache = hold.HistoryCache()
+
+    async def _ch_history(self, agent_id: str, host: str, before_ms: int) -> tuple[bool, dict[str, Any] | None]:
+        return await hold_history(self.ch, agent_id, host, before_ms)
+
+    def classify_fn(self) -> ClassifyFn:
+        return self.classify_override or hold.get_classify()
 
     # ------------------------------------------------------------------ helpers
     def emit(self, type_: Any, data: dict[str, Any]) -> None:
@@ -128,11 +135,7 @@ class Checkpoint:
 
     @staticmethod
     def is_external(action: str, target: str, policy: Policy) -> int:
-        if action not in HTTP_ACTIONS:
-            return 0
-        host = host_of(target)
-        internal = {h.lower() for h in policy.internal_hosts}
-        return 0 if host and host in internal else 1
+        return _is_external(action, target, policy)
 
     def honeytoken_hit(self, call: ToolCall) -> bool:
         if honeytoken.scan(call.payload, self.honeytokens):
@@ -204,12 +207,26 @@ class Checkpoint:
                 result, reason = "denied", "blocked"
             elif honey:
                 result, reason = "denied", "honeytoken"
-            elif st.hold_enabled and call.action in policy.high_risk_actions:
-                t0 = time.perf_counter()
-                decision = await hold.decide(call, st.ring_window(agent, ts), st, policy)
-                if decision.verdict is not None:
-                    st.hold_samples.append(round((time.perf_counter() - t0) * 1000, 3))
-                if not decision.allow:
+            else:
+                # 1-2: policy (fixed-deny actions, denylisted destinations) always applies.
+                decision = hold.policy_check(call, policy, is_ext)
+                # 3: hold mode for external posts outside the agent's allowlist.
+                if decision is None and st.hold_on(agent) and hold.hold_applies(call, policy, is_ext):
+                    decision = await hold.decide(
+                        call,
+                        st.ring_window(agent, ts),
+                        ts=ts,
+                        mode=st.modes.get(agent, "normal"),
+                        is_ext=is_ext,
+                        lookup=self.history_lookup,
+                        classify=self.classify_fn(),
+                        cache=self.hold_cache,
+                    )
+                    if decision.timed and decision.ms is not None:
+                        st.hold_samples.append(decision.ms)
+                    if decision.receipt and not decision.receipt.get("cached"):
+                        st.hold_receipts.append({**decision.receipt, "agent_id": agent, "ts_ms": ts})
+                if decision is not None and not decision.allow:
                     result, reason = "denied", (decision.reason or "hold_rule")
 
             prev_hash = st.last_hash.get(agent, "")
@@ -283,7 +300,13 @@ class Checkpoint:
                 self._quarantine(agent)
                 if incident.contained_ms is None:
                     incident.contained_ms = now_ms()
-                    st.ttc_samples.append(float(max(0, incident.contained_ms - ts)))
+                    sample = float(max(0, incident.contained_ms - ts))
+                    # H: honeytoken trips are reported separately from detector/hold containment.
+                    (st.honey_ttc_samples if reason == "honeytoken" else st.ttc_samples).append(sample)
+
+            hold_alert: dict[str, Any] | None = None
+            if decision is not None and decision.alert and decision.verdict is not None:
+                hold_alert = self._hold_alert(agent, decision, ts, result)
 
             event = {k: v for k, v in row.items() if k not in ("prev_hash", "hash")}
             event["incident_id"] = incident.id if incident else None
@@ -292,6 +315,11 @@ class Checkpoint:
             self.emit("tool_event", event)
             if incident_changed and incident is not None:
                 self.emit("incident", incident.model_dump())
+                v = incident.verdict
+                if decision is not None and v is not None and v.decision_source == "quorum":
+                    self.emit("quorum", self._quorum_data(agent, incident.id, incident.rule, v))
+            if hold_alert is not None:
+                self.emit("alert", hold_alert)
             if st.modes.get(agent) != prev_mode:
                 self.emit("agent_state", self.agent_state(agent))
 
@@ -302,6 +330,40 @@ class Checkpoint:
             incident_id=incident.id if incident else None,
             ts_ms=ts,
         )
+
+    def _hold_alert(self, agent: str, d: hold.HoldDecision, ts: int, result: str) -> dict[str, Any]:
+        """Non-blocking alert for a hold/policy decision (flagged -> benign, held for review, ...)."""
+        v = d.verdict
+        assert v is not None
+        reason = v.reason if d.note in ("", "flagged -> benign") else f"{d.note}: {v.reason}"
+        p = AlertPayload(
+            agent_id=agent,
+            rule=d.rule,
+            verdict=v.verdict,
+            confidence=v.confidence,
+            reason=reason,
+            decision_source=v.decision_source,
+            detected_at_ms=now_ms(),
+            last_step_ts_ms=ts,
+            model_ids=list(v.model_ids),
+        )
+        key = f"{agent}|{d.rule}|{ts}"
+        self.state.add_verdict_key(key)
+        rec = self._alert_record(agent, p, key, blocking=False, incident_id=None)
+        rec.update({"source": "hold", "result": result, "hold_decision_ms": d.ms, "why": list(d.why)})
+        return rec
+
+    @staticmethod
+    def _quorum_data(agent: str, incident_id: str, rule: str, v: Verdict) -> dict[str, Any]:
+        return {
+            "agent_id": agent,
+            "incident_id": incident_id,
+            "rule": rule,
+            "verdict": v.verdict,
+            "confidence": v.confidence,
+            "reason": v.reason,
+            "model_ids": list(v.model_ids),
+        }
 
     # ------------------------------------------------------------------ alerts / block
     def _check_and_record_key(self, agent_id: str, p: AlertPayload) -> str:
@@ -362,18 +424,7 @@ class Checkpoint:
             self.emit("incident", inc.model_dump())
             self.emit("agent_state", self.agent_state(agent_id))
             if p.decision_source == "quorum":
-                self.emit(
-                    "quorum",
-                    {
-                        "agent_id": agent_id,
-                        "incident_id": inc.id,
-                        "rule": p.rule,
-                        "verdict": p.verdict,
-                        "confidence": verdict.confidence,
-                        "reason": p.reason,
-                        "model_ids": list(p.model_ids),
-                    },
-                )
+                self.emit("quorum", self._quorum_data(agent_id, inc.id, p.rule, verdict))
         return {"status": "blocked", "incident_id": inc.id}
 
     async def record_alert(self, agent_id: str, p: AlertPayload) -> dict[str, Any]:
@@ -550,6 +601,18 @@ class Checkpoint:
         det = list(st.timing_samples.get("detector", []))
         ev = st.heartbeats.get("eval") or {}
         m = ev.get("metrics") or {}
+        receipts: list[dict[str, Any]] = [receipt] if receipt else []
+        if st.honey_ttc_samples:
+            receipts.append(
+                {
+                    "kind": "honeytoken_contain",
+                    "ms": _median(st.honey_ttc_samples),
+                    "n": len(st.honey_ttc_samples),
+                    "note": "honeytoken trips (no detector/model in the loop); excluded from time_to_contain_ms",
+                }
+            )
+        if st.hold_receipts:
+            receipts.append(dict(st.hold_receipts[-1]))
         return EvidenceBundle(
             events_stored=count,
             query_p50_ms=_pct(det, 0.50),
@@ -563,7 +626,7 @@ class Checkpoint:
             cost_akashml=_num(m.get("cost_akashml"), float),
             cost_openai=_num(m.get("cost_openai"), float),
             priced_on=_num(m.get("priced_on"), str),
-            receipts=[receipt] if receipt else [],
+            receipts=receipts,
         )
 
     async def audit_verify(self, agent_id: str) -> dict[str, Any]:

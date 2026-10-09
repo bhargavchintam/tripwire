@@ -1,10 +1,11 @@
-import { Hand, LoaderCircle, Radio, TriangleAlert, WifiOff } from "lucide-react";
+import { Hand, LoaderCircle, Presentation, Radio, TriangleAlert, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "./ui/switch";
 import { Tooltip } from "./ui/tooltip";
 import { api } from "../lib/api";
 import { isNum } from "../lib/format";
 import { useTripwire } from "../hooks/useTripwire";
+import { usePresenter } from "../hooks/usePresenter";
 
 export async function toggleHold(current: boolean | null, setHold: (v: boolean) => void) {
   const next = !current;
@@ -41,6 +42,7 @@ function LivePill() {
 
 export function Header() {
   const { state, setHold } = useTripwire();
+  const presenter = usePresenter();
   // Mock sends events_per_s at the top level; real heartbeats nest it under Heartbeat.metrics.
   const eps = state.metrics?.events_per_s ?? state.metrics?.metrics?.events_per_s;
   return (
@@ -69,6 +71,18 @@ export function Header() {
             </span>
           )}
           <LivePill />
+          <Tooltip content="Presenter mode: bigger type, hides the event table and secondary panels. Shortcut: P">
+            <button
+              onClick={presenter.toggle}
+              aria-pressed={presenter.on}
+              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+                presenter.on ? "border-info/60 bg-info/10 text-info" : "border-line bg-panel text-muted hover:text-fg"
+              }`}
+            >
+              <Presentation className="size-4" /> Presenter
+              <kbd className="rounded bg-black/25 px-1 font-mono text-[10px]">P</kbd>
+            </button>
+          </Tooltip>
           <Tooltip content="When ON, high-risk actions (http_post, assume_role, disable_logging) wait for a verdict before they run. Shortcut: H">
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5">
               <Hand className={`size-4 ${state.holdEnabled ? "text-held" : "text-dim"}`} />

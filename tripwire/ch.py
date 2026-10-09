@@ -36,7 +36,15 @@ def _kwargs(readonly: bool = False, database: str | None = None) -> dict:
 
 
 def client(readonly: bool = False, **settings):
-    """Sync client. Not safe to share across threads/tasks running concurrent queries."""
+    """Sync client. Not safe to share across threads/tasks running concurrent queries.
+
+    On ClickHouse Cloud (secure=1, 2 replicas) a row written through one replica may not be
+    visible yet on the replica serving the next read, so the read-write client defaults to
+    select_sequential_consistency=1 (read-after-write for the detector and hold lookups).
+    Not applied to the read-only client: readonly=1 forbids changing settings.
+    """
+    if get_settings().clickhouse_secure and not readonly:
+        settings.setdefault("select_sequential_consistency", 1)
     return clickhouse_connect.get_client(**_kwargs(readonly), settings=settings or None)
 
 

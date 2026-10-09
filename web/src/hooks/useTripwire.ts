@@ -5,8 +5,19 @@ import { createContext, useContext, useEffect, useReducer, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "../lib/api";
-import { toMs } from "../lib/format";
-import type { AgentMode, Alert, Incident, Outbreak, StreamEvent, ToolEvent } from "../lib/types";
+import { isNum, toMs } from "../lib/format";
+import type {
+  AgentMode,
+  Alert,
+  ApproveResult,
+  BacktestResult,
+  GuardrailProof,
+  Incident,
+  Outbreak,
+  QuorumVote,
+  StreamEvent,
+  ToolEvent,
+} from "../lib/types";
 
 export type Connection = "connecting" | "live" | "reconnecting";
 
@@ -33,6 +44,11 @@ export interface TripwireState {
   quarantineOrder: string[]; // most recent last
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   extras: Record<string, any>; // last quorum / backtest / guardrail payloads (phase 2)
+  quorums: Record<string, QuorumVote[]>; // incident_id -> per-model votes (SSE quorum)
+  guardrails: Record<string, { proof?: GuardrailProof; approved?: ApproveResult }>;
+  approvedIds: string[]; // incidents whose guardrail was approved this session
+  modelIds: string[]; // distinct verdict model ids seen on the stream
+  lastBacktest: BacktestResult | null;
   lastSeq: number;
 }
 
@@ -54,16 +70,50 @@ export const initialState: TripwireState = {
   metrics: null,
   quarantineOrder: [],
   extras: {},
+  quorums: {},
+  guardrails: {},
+  approvedIds: [],
+  modelIds: [],
+  lastBacktest: null,
   lastSeq: 0,
 };
 
-/** Live agents only: synthetic background agents are named agent-NN. */
-export const isLiveAgent = (id: string | undefined): id is string => !!id && !id.startsWith("agent-");
+/** Live agents only: synthetic background agents are named agent-NN; guardrail replays run as verify:*. */
+export const isLiveAgent = (id: string | undefined): id is string =>
+  !!id && !id.startsWith("agent-") && !id.startsWith("verify:");
+
+function addModels(seen: string[], ids: unknown): string[] {
+  if (!Array.isArray(ids) || ids.length === 0) return seen;
+  const next = new Set(seen);
+  for (const m of ids) if (typeof m === "string" && m) next.add(m);
+  return next.size === seen.length ? seen : [...next];
+}
+
+/** Accepts the quorum payload in any of the shapes the checkpoint may send (votes | models | verdicts). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function quorumVotes(d: Record<string, any>): QuorumVote[] {
+  const raw = d.votes ?? d.models ?? d.verdicts ?? d.results;
+  if (Array.isArray(raw)) {
+    return raw
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((v: any) => ({
+        model_id: String(v?.model_id ?? v?.model ?? v?.id ?? (Array.isArray(v?.model_ids) ? v.model_ids[0] : "") ?? ""),
+        verdict: v?.verdict,
+        confidence: typeof v?.confidence === "number" ? v.confidence : undefined,
+      }))
+      .filter((v) => v.model_id);
+  }
+  const v = d.verdict && typeof d.verdict === "object" ? d.verdict : d;
+  const ids: unknown = v.model_ids ?? d.model_ids;
+  return Array.isArray(ids) ? ids.map((m) => ({ model_id: String(m), verdict: v.verdict, confidence: v.confidence })) : [];
+}
 
 type Action =
   | { kind: "connection"; value: Connection }
   | { kind: "stream"; ev: StreamEvent }
-  | { kind: "hold"; value: boolean };
+  | { kind: "hold"; value: boolean }
+  | { kind: "approved"; result: ApproveResult }
+  | { kind: "backtest"; result: BacktestResult };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normEvent(d: Record<string, any>, fallbackTs: number): ToolEvent {
@@ -108,6 +158,19 @@ function applySnapshot(state: TripwireState, d: Record<string, any>, ts: number)
   for (const inc of incidentList) if (inc?.id) incidents[inc.id] = inc;
   const modes: Record<string, AgentMode> = { ...(status.modes ?? {}) };
   for (const b of status.blocked ?? []) modes[b] = "quarantined";
+  for (const id of Object.keys(modes)) if (!isLiveAgent(id)) delete modes[id];
+  let modelIds = state.modelIds;
+  for (const inc of incidentList) modelIds = addModels(modelIds, inc?.verdict?.model_ids);
+  for (const a of (d.alerts ?? []) as Alert[]) modelIds = addModels(modelIds, a?.model_ids);
+  // The checkpoint snapshot has no top-level outbreak; rebuild it from the newest OPEN incident that
+  // carries one, so a reload / late-joining screen still shows the trace (reset closes them -> cleared).
+  let outbreak: TripwireState["outbreak"] = d.outbreak ?? null;
+  if (!outbreak) {
+    const traced = incidentList
+      .filter((i) => i?.outbreak && i.closed_ms == null && isLiveAgent(i.agent_id))
+      .sort((a, b) => b.opened_ms - a.opened_ms)[0];
+    if (traced?.outbreak) outbreak = { ...traced.outbreak, incident_id: traced.id };
+  }
   return {
     ...state,
     isMock: !!d.mock,
@@ -119,17 +182,28 @@ function applySnapshot(state: TripwireState, d: Record<string, any>, ts: number)
     stats,
     incidents,
     alerts: (d.alerts ?? []).slice(0, MAX_ALERTS),
-    outbreak: d.outbreak ?? null,
+    outbreak,
     metrics: d.metrics ?? null,
     quarantineOrder: Object.entries(modes)
       .filter(([, m]) => m === "quarantined")
       .map(([a]) => a),
+    modelIds,
   };
 }
 
 function reducer(state: TripwireState, action: Action): TripwireState {
   if (action.kind === "connection") return { ...state, connection: action.value };
   if (action.kind === "hold") return { ...state, holdEnabled: action.value };
+  if (action.kind === "backtest") return { ...state, lastBacktest: action.result };
+  if (action.kind === "approved") {
+    const id = action.result.incident_id;
+    return {
+      ...state,
+      policyVersion: isNum(action.result.policy_version) ? action.result.policy_version : state.policyVersion,
+      guardrails: { ...state.guardrails, [id]: { ...state.guardrails[id], approved: action.result } },
+      approvedIds: state.approvedIds.includes(id) ? state.approvedIds : [...state.approvedIds, id],
+    };
+  }
 
   const { ev } = action;
   const d = ev.data ?? {};
@@ -156,7 +230,7 @@ function reducer(state: TripwireState, action: Action): TripwireState {
 
     case "agent_state": {
       const id: string | undefined = d.agent_id;
-      if (!id) return base;
+      if (!id || !isLiveAgent(id)) return base;
       const mode: AgentMode = d.mode ?? (d.blocked ? "quarantined" : "normal");
       const blocked = mode === "quarantined" ? [...new Set([...base.blocked, id])] : base.blocked.filter((b) => b !== id);
       const quarantineOrder =
@@ -168,13 +242,18 @@ function reducer(state: TripwireState, action: Action): TripwireState {
 
     case "incident": {
       const inc = (d.incident ?? d) as Incident;
-      if (!inc?.id) return base;
-      return { ...base, incidents: { ...base.incidents, [inc.id]: { ...base.incidents[inc.id], ...inc } } };
+      if (!inc?.id || !isLiveAgent(inc.agent_id)) return base;
+      return {
+        ...base,
+        incidents: { ...base.incidents, [inc.id]: { ...base.incidents[inc.id], ...inc } },
+        modelIds: addModels(base.modelIds, inc.verdict?.model_ids),
+      };
     }
 
     case "alert": {
       const a = (d.alert ?? d) as Alert;
-      return { ...base, alerts: [a, ...base.alerts].slice(0, MAX_ALERTS) };
+      if (a.agent_id && !isLiveAgent(a.agent_id)) return base;
+      return { ...base, alerts: [a, ...base.alerts].slice(0, MAX_ALERTS), modelIds: addModels(base.modelIds, a.model_ids) };
     }
 
     case "outbreak": {
@@ -205,10 +284,43 @@ function reducer(state: TripwireState, action: Action): TripwireState {
       return { ...base, metrics: isConfig ? base.metrics : d, holdEnabled: hold, policyVersion };
     }
 
-    case "quorum":
+    case "quorum": {
+      const votes = quorumVotes(d);
+      const incId: string | undefined = d.incident_id ?? d.id;
+      return {
+        ...base,
+        extras: { ...base.extras, quorum: d },
+        quorums: incId && votes.length ? { ...base.quorums, [incId]: votes } : base.quorums,
+        modelIds: addModels(base.modelIds, votes.map((v) => v.model_id)),
+      };
+    }
+
     case "backtest":
-    case "guardrail":
-      return { ...base, extras: { ...base.extras, [ev.type]: d } };
+      return { ...base, extras: { ...base.extras, backtest: d }, lastBacktest: (d.result ?? d) as BacktestResult };
+
+    case "guardrail": {
+      const incId: string | undefined = d.incident_id;
+      const extras = { ...base.extras, guardrail: d };
+      if (!incId) return { ...base, extras };
+      const prev = base.guardrails[incId] ?? {};
+      if (d.phase === "approved") {
+        const policyVersion = typeof d.policy_version === "number" ? d.policy_version : base.policyVersion;
+        return {
+          ...base,
+          extras,
+          policyVersion,
+          guardrails: { ...base.guardrails, [incId]: { ...prev, approved: d as ApproveResult } },
+          approvedIds: base.approvedIds.includes(incId) ? base.approvedIds : [...base.approvedIds, incId],
+        };
+      }
+      const proof = (d.proof ?? d) as GuardrailProof;
+      return {
+        ...base,
+        extras,
+        guardrails: { ...base.guardrails, [incId]: { ...prev, proof } },
+        lastBacktest: proof.backtest ?? base.lastBacktest,
+      };
+    }
 
     default:
       return base;
@@ -298,7 +410,12 @@ export function useTripwireStream() {
     };
   }, [qc]);
 
-  return { state, setHold: (value: boolean) => dispatch({ kind: "hold", value }) };
+  return {
+    state,
+    setHold: (value: boolean) => dispatch({ kind: "hold", value }),
+    recordApproved: (result: ApproveResult) => dispatch({ kind: "approved", result }),
+    recordBacktest: (result: BacktestResult) => dispatch({ kind: "backtest", result }),
+  };
 }
 
 export type TripwireCtx = ReturnType<typeof useTripwireStream>;
@@ -328,4 +445,33 @@ export function useIncident(id: string | null) {
 
 export function usePolicy(version: number | null) {
   return useQuery({ queryKey: ["policy", version], queryFn: api.policy, refetchInterval: 10_000, retry: false });
+}
+
+export function useAudit(agentId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["audit", agentId],
+    queryFn: () => api.audit(agentId as string),
+    enabled: !!agentId,
+    retry: false,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useHeatmap(hours = 72, poll = true) {
+  return useQuery({
+    queryKey: ["fleet-heatmap", hours],
+    queryFn: () => api.heatmap(hours),
+    retry: false,
+    staleTime: 20_000,
+    refetchInterval: poll ? 30_000 : false,
+  });
+}
+
+export function useFleetTop(minutes = 60, limit = 10) {
+  return useQuery({
+    queryKey: ["fleet-top", minutes, limit],
+    queryFn: () => api.top(minutes, limit),
+    retry: false,
+    refetchInterval: 5_000,
+  });
 }

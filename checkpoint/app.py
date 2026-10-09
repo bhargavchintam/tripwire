@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,16 +23,18 @@ from loguru import logger
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
-from checkpoint import hold
+from checkpoint import fleet, guardrail, hold
 from checkpoint.auth import require_token
 from checkpoint.bus import Bus
 from checkpoint.chread import CHReader, CHUnavailable
-from checkpoint.service import FIXTURES_DIR, Checkpoint, Conflict, NotFound
-from checkpoint.state import DEFAULT_STATE_PATH, State
+from checkpoint.service import _DEFAULT, FIXTURES_DIR, Checkpoint, Conflict, NotFound
+from checkpoint.state import DEFAULT_STATE_PATH, State, now_ms
 from checkpoint.writer import ClickHouseWriter, Writer
 from tripwire.config import Settings, get_settings
 from tripwire.contracts import (
     AlertPayload,
+    BacktestResult,
+    ClassifyFn,
     EvidenceBundle,
     Heartbeat,
     Incident,
@@ -46,6 +49,8 @@ from tripwire.contracts import (
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIST = ROOT / "web" / "dist"
 SSE_PING_S = 15
+GUILD_TIMEOUT_S = 15.0
+GUILD_BODY_MAX = 2048
 
 
 class HoldConfig(BaseModel):
@@ -73,6 +78,8 @@ def create_app(
     fixtures_dir: Path = FIXTURES_DIR,
     honeytokens: list[str] | None = None,
     web_dist: Path | None = WEB_DIST,
+    history_lookup: Any = _DEFAULT,
+    classify: ClassifyFn | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     writer = writer if writer is not None else ClickHouseWriter(table=events_table)
@@ -84,6 +91,8 @@ def create_app(
         ch=CHReader(enabled=ch_enabled, table=events_table),
         honeytokens=settings.honeytokens if honeytokens is None else honeytokens,
         fixtures_dir=fixtures_dir,
+        history_lookup=history_lookup,
+        classify=classify,
     )
 
     @asynccontextmanager
@@ -94,6 +103,7 @@ def create_app(
                 await asyncio.wait_for(svc.reconcile_chain(), 6.0)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"startup: chain reconcile skipped ({exc!r})")
+            await svc.ch.warm("hold")  # hold-mode history lookups must not pay the connect cost
         hold.get_classify()
         await writer.start()
         save_task = asyncio.create_task(state.save_loop(), name="tripwire-state-save")
@@ -253,13 +263,19 @@ def create_app(
         except CHUnavailable as exc:
             raise HTTPException(status_code=503, detail=f"clickhouse unavailable: {exc}") from exc
 
-    # ---------------------------------------------------------------- phase-2 stubs
+    def _ch_503(exc: CHUnavailable) -> HTTPException:
+        return HTTPException(status_code=503, detail=f"clickhouse unavailable: {exc}")
+
+    # ---------------------------------------------------------------- policy backtest / copilot
+    @app.post("/policy/backtest", response_model=BacktestResult, dependencies=auth)
+    async def policy_backtest(p: Policy) -> BacktestResult:
+        try:
+            return await guardrail.backtest(svc, p, {"source": "policy"})
+        except CHUnavailable as exc:
+            raise _ch_503(exc) from exc
+
     def _phase2() -> JSONResponse:
         return JSONResponse(status_code=501, content={"detail": "phase 2"})
-
-    @app.post("/policy/backtest", dependencies=auth)
-    async def policy_backtest() -> JSONResponse:
-        return _phase2()
 
     @app.post("/policy/copilot", dependencies=auth)
     async def policy_copilot() -> JSONResponse:
@@ -272,17 +288,48 @@ def create_app(
             return JSONResponse(status_code=503, content={"detail": "ai/copilot.py not available yet"})
         return _phase2()
 
+    # ---------------------------------------------------------------- guardrail (proven cure)
     @app.post("/guardrail/{incident_id}/prove", dependencies=auth)
-    async def guardrail_prove(incident_id: str) -> JSONResponse:
-        return _phase2()
+    async def guardrail_prove(incident_id: str) -> dict[str, Any]:
+        return await guardrail.prove(svc, incident_id)
 
     @app.post("/guardrail/{incident_id}/approve", dependencies=auth)
-    async def guardrail_approve(incident_id: str) -> JSONResponse:
-        return _phase2()
+    async def guardrail_approve(incident_id: str) -> dict[str, Any]:
+        return await guardrail.approve(svc, incident_id)
 
+    # ---------------------------------------------------------------- fleet analytics
+    @app.get("/fleet/heatmap")
+    async def fleet_heatmap(hours: int = Query(default=72, ge=1, le=336)) -> dict[str, Any]:
+        try:
+            return await fleet.heatmap(svc.ch, hours, now_ms())
+        except CHUnavailable as exc:
+            raise _ch_503(exc) from exc
+
+    @app.get("/fleet/top")
+    async def fleet_top(
+        minutes: int = Query(default=60, ge=1, le=10080), limit: int = Query(default=10, ge=1, le=100)
+    ) -> list[dict[str, Any]]:
+        try:
+            return await fleet.top(svc.ch, minutes, limit, now_ms())
+        except CHUnavailable as exc:
+            raise _ch_503(exc) from exc
+
+    # ---------------------------------------------------------------- Guild trigger
     @app.post("/guild/run", dependencies=auth)
     async def guild_run() -> JSONResponse:
-        return _phase2()
+        url, key = settings.guild_trigger_url.strip(), settings.guild_trigger_key.strip()
+        if not url or not key:
+            return JSONResponse(status_code=503, content={"detail": "guild trigger not configured"})
+        user, _, pw = key.partition(":")  # "user:pass", or the key alone as the Basic username
+        try:
+            async with httpx.AsyncClient(timeout=GUILD_TIMEOUT_S) as c:
+                r = await c.post(url, json={"input": "run release checks"}, auth=httpx.BasicAuth(user, pw))
+        except httpx.HTTPError as exc:
+            return JSONResponse(status_code=502, content={"detail": f"guild trigger unreachable: {type(exc).__name__}"})
+        return JSONResponse(
+            status_code=200,
+            content={"status": r.status_code, "ok": r.is_success, "body": r.text[:GUILD_BODY_MAX]},
+        )
 
     # ---------------------------------------------------------------- UI (mounted LAST)
     if web_dist is not None and Path(web_dist).is_dir():

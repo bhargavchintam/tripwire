@@ -136,3 +136,74 @@ export interface StreamEvent {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: Record<string, any>;
 }
+
+// ---- Phase 2 (master §4 endpoints B–H; UI-only consumers) -------------------
+
+export interface BacktestResult {
+  events_scanned: number | null;
+  query_ms: number | null;
+  would_block: number | null;
+  would_block_attack_cases?: number | null;
+  would_block_normal_cases?: number | null;
+  sql?: string;
+  mock?: boolean;
+}
+
+export interface GuardrailGate {
+  name: string;
+  passed: boolean | null; // null = skipped (does not count against all_passed)
+  detail?: string;
+  ms?: number | null;
+}
+
+export interface GuardrailProof {
+  incident_id: string;
+  candidate: Policy;
+  added_allowlist: string[];
+  added_denylist: string[];
+  gates: GuardrailGate[];
+  backtest: BacktestResult | null;
+  all_passed: boolean;
+  proved_at_ms: number;
+  mock?: boolean;
+}
+
+export interface ApproveResult {
+  incident_id: string;
+  policy_version: number;
+  restored: string[];
+  mock?: boolean;
+}
+
+export interface AuditVerify {
+  agent_id: string;
+  events: number | null;
+  intact: boolean;
+  first_break_ts_ms: number | null;
+  mock?: boolean;
+}
+
+/** cells: [agent_idx, hour_idx, score 0..100, events] */
+export interface FleetHeatmap {
+  agents: string[];
+  hours: number[];
+  cells: [number, number, number, number][];
+  query_ms: number | null;
+  rows_read: number | null;
+  formula?: string;
+  mock?: boolean;
+}
+
+export interface FleetTopRow {
+  agent_id: string;
+  score: number;
+  events: number;
+  denied: number;
+  external_posts: number;
+}
+
+export interface QuorumVote {
+  model_id: string;
+  verdict?: VerdictLabel | string;
+  confidence?: number;
+}

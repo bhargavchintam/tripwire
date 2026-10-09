@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, BookCheck, Handshake, ScrollText, Siren } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, BookCheck, Grid3x3, Handshake, ScrollText, Siren } from "lucide-react";
 import { toast } from "sonner";
 import { Header, toggleHold } from "./components/Header";
 import { IncidentSheet } from "./components/IncidentSheet";
@@ -7,11 +7,19 @@ import { restoreAgent } from "./components/AgentCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { LiveTab } from "./tabs/LiveTab";
 import { IncidentsTab } from "./tabs/IncidentsTab";
-import { EvidenceTab } from "./tabs/EvidenceTab";
-import { PolicyTab } from "./tabs/PolicyTab";
-import { SponsorsTab } from "./tabs/SponsorsTab";
 import { api } from "./lib/api";
 import { TripwireContext, useTripwireStream, type TripwireCtx } from "./hooks/useTripwire";
+import { PresenterContext, usePresenterState } from "./hooks/usePresenter";
+
+// Heavy / secondary tabs load on first open so the main chunk stays small (Recharts lives in Evidence).
+const EvidenceTab = lazy(() => import("./tabs/EvidenceTab"));
+const FleetTab = lazy(() => import("./tabs/FleetTab"));
+const PolicyTab = lazy(() => import("./tabs/PolicyTab"));
+const SponsorsTab = lazy(() => import("./tabs/SponsorsTab"));
+
+function Lazy({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<div className="p-6 text-sm text-dim">Loading…</div>}>{children}</Suspense>;
+}
 
 async function replay() {
   try {
@@ -38,10 +46,12 @@ function isTyping(t: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
-/** Presenter shortcuts: R replay · X restore most recently quarantined · H hold · 0 reset. */
-function useShortcuts(ctx: TripwireCtx) {
+/** Presenter shortcuts: R replay · X restore most recently quarantined · H hold · P presenter · 0 reset. */
+function useShortcuts(ctx: TripwireCtx, togglePresenter: () => void) {
   const ref = useRef(ctx);
   ref.current = ctx;
+  const presRef = useRef(togglePresenter);
+  presRef.current = togglePresenter;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || isTyping(e.target)) return;
@@ -50,6 +60,7 @@ function useShortcuts(ctx: TripwireCtx) {
       if (k === "r") replay();
       else if (k === "0") reset();
       else if (k === "h") toggleHold(state.holdEnabled, setHold);
+      else if (k === "p") presRef.current();
       else if (k === "x") {
         const target = [...state.quarantineOrder].reverse().find((a) => state.modes[a] === "quarantined");
         if (target) restoreAgent(target);
@@ -64,14 +75,16 @@ function useShortcuts(ctx: TripwireCtx) {
 
 export default function App() {
   const ctx = useTripwireStream();
+  const presenter = usePresenterState();
   const [tab, setTab] = useState("live");
   const [openId, setOpenId] = useState<string | null>(null);
   const open = useCallback((id: string) => setOpenId(id), []);
-  useShortcuts(ctx);
+  useShortcuts(ctx, presenter.toggle);
   const openCount = Object.values(ctx.state.incidents).filter((i) => !i.closed_ms).length;
 
   return (
     <TripwireContext.Provider value={ctx}>
+     <PresenterContext.Provider value={presenter}>
       <div className="min-h-full">
         <Header />
         <main className="mx-auto max-w-[1600px] px-5 py-4">
@@ -85,6 +98,9 @@ export default function App() {
                 {openCount > 0 && (
                   <span className="rounded bg-bad px-1.5 font-mono text-[11px] font-bold text-white">{openCount}</span>
                 )}
+              </TabsTrigger>
+              <TabsTrigger value="fleet">
+                <Grid3x3 /> Fleet
               </TabsTrigger>
               <TabsTrigger value="evidence">
                 <BookCheck /> Evidence
@@ -102,19 +118,31 @@ export default function App() {
             <TabsContent value="incidents">
               <IncidentsTab onOpen={open} />
             </TabsContent>
+            <TabsContent value="fleet">
+              <Lazy>
+                <FleetTab />
+              </Lazy>
+            </TabsContent>
             <TabsContent value="evidence">
-              <EvidenceTab />
+              <Lazy>
+                <EvidenceTab />
+              </Lazy>
             </TabsContent>
             <TabsContent value="policy">
-              <PolicyTab />
+              <Lazy>
+                <PolicyTab />
+              </Lazy>
             </TabsContent>
             <TabsContent value="sponsors">
-              <SponsorsTab />
+              <Lazy>
+                <SponsorsTab />
+              </Lazy>
             </TabsContent>
           </Tabs>
         </main>
         <IncidentSheet id={openId} onClose={() => setOpenId(null)} />
       </div>
+     </PresenterContext.Provider>
     </TripwireContext.Provider>
   );
 }
