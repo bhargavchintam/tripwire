@@ -2,7 +2,7 @@ import { useId, type CSSProperties, type ReactNode } from "react";
 import { Database, DollarSign, Gauge, Hand, Lock, Timer } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { Count, GlowCard, InkMarker, toneText, type Tone } from "./fx";
-import { DASH, fmtInt, isNum } from "../lib/format";
+import { DASH, akashPriceDate, fmtInt, isNum } from "../lib/format";
 import { cn } from "../lib/utils";
 import { useEvidence, useTripwire } from "../hooks/useTripwire";
 import { usePresenter } from "../hooks/usePresenter";
@@ -282,16 +282,12 @@ export function KpiStrip() {
         index={5}
         icon={<DollarSign />}
         label="$ / 1k events"
-        source={`/evidence cost_akashml vs cost_openai${e?.priced_on ? `, priced on ${e.priced_on}` : ""}`}
+        source={`/evidence cost_akashml${e?.priced_on ? `, priced on ${akashPriceDate(e.priced_on)}` : ""}`}
         tone="model"
         measured={isNum(e?.cost_akashml)}
         caption={
           <span className="min-w-0 truncate">
-            <span className="text-model">AkashML</span> vs{" "}
-            <span className="font-mono text-fg">
-              <Count value={e?.cost_openai} digits={4} prefix="$" />
-            </span>{" "}
-            OpenAI
+            <span className="text-model">AkashML</span> · measured eval verdicts
           </span>
         }
       >

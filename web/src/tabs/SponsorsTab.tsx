@@ -366,7 +366,7 @@ export function SponsorsTab() {
           icon={<Brain strokeWidth={1.75} />}
           tag="Model verdicts"
           headline="Verdicts, on Akash"
-          role="Verdicts on held actions and detections run on AkashML (meta-llama/Llama-3.3-70B-Instruct, chosen by measured latency). Cost per 1,000 events vs OpenAI is measured by the eval and shown on the Evidence tab; at today's list prices OpenAI's gpt-4o-mini is slightly cheaper. We run on AkashML for open models on decentralized compute."
+          role="Verdicts on held actions and detections run on AkashML (meta-llama/Llama-3.3-70B-Instruct, chosen by measured latency)."
           art={
             <ArtFrame>
               <RingArt pulse={modelPulse} />

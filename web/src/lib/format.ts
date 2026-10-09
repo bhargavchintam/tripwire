@@ -47,3 +47,10 @@ export function modeLabel(mode: string | undefined): string {
   if (mode === "heightened") return "HEIGHTENED";
   return "ACTIVE";
 }
+
+/** The eval's price date, shown with the AkashML price source only (the console shows no provider comparison). */
+export function akashPriceDate(pricedOn: string | null | undefined): string | null {
+  if (!pricedOn) return null;
+  const date = pricedOn.split(" (")[0].trim();
+  return date ? `${date} · AkashML /v1/models (live)` : null;
+}

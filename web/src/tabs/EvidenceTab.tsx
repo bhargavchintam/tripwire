@@ -26,7 +26,7 @@ import { Chip, Count, GlowCard, InkMarker, Reveal, SectionHeader, toneVar, type 
 import { LiftBars, type LiftDatum } from "../components/analytics/LiftBars";
 import { Metric, Unit } from "../components/analytics/Metric";
 import { MsCount } from "../components/analytics/MsCount";
-import { DASH, fmtClock, isNum } from "../lib/format";
+import { DASH, akashPriceDate, fmtClock, isNum } from "../lib/format";
 import { cn } from "../lib/utils";
 import type { EvidenceBundle } from "../lib/types";
 import { useEvidence, useTripwire } from "../hooks/useTripwire";
@@ -45,7 +45,7 @@ const SOURCE: Record<Exclude<keyof EvidenceBundle, "receipts" | "mock">, string>
   recall: "eval runner over labelled cases",
   n_cases: "fixtures/eval attack + benign",
   cost_akashml: "Verdict tokens × AkashML price",
-  cost_openai: "same tokens × OpenAI price",
+  cost_openai: "not shown in the console",
   priced_on: "price table date",
 };
 
@@ -399,7 +399,7 @@ function CostRow({
 
 function CostCard({ e, className }: { e: EvidenceBundle | undefined; className?: string }) {
   const ev = useEvalHeartbeat();
-  const vals = [e?.cost_akashml, e?.cost_openai].filter(isNum);
+  const vals = [e?.cost_akashml].filter(isNum);
   const max = vals.length ? Math.max(...vals) : null;
   return (
     <GlowCard
@@ -413,20 +413,19 @@ function CostCard({ e, className }: { e: EvidenceBundle | undefined; className?:
         </>
       }
       title="Per 1,000 events"
-      description="The same measured verdict tokens, priced at each provider's rate."
+      description="The eval's measured verdict tokens, priced at AkashML's live rate."
       bodyClassName="flex flex-col gap-5"
       footer={
         <div className="flex items-start gap-2 border-t border-line pt-4 text-[12px] leading-[1.45] text-muted">
           <CalendarDays className="mt-px size-3.5 shrink-0 text-dim" strokeWidth={1.75} />
           <span>
             Priced on{" "}
-            {e?.priced_on ? <span className="text-fg">{e.priced_on}</span> : <span className="text-dim">{DASH}</span>}
+            {e?.priced_on ? <span className="text-fg">{akashPriceDate(e.priced_on)}</span> : <span className="text-dim">{DASH}</span>}
           </span>
         </div>
       }
     >
       <CostRow index={0} name="AkashML" model={ev.akashmlModel} value={e?.cost_akashml} max={max} tone="model" />
-      <CostRow index={1} name="OpenAI" model={ev.openaiModel} value={e?.cost_openai} max={max} tone="neutral" />
     </GlowCard>
   );
 }
@@ -569,7 +568,6 @@ const GROUPS: { title: string; rows: Row[] }[] = [
     title: "Cost · per 1,000 events",
     rows: [
       { key: "cost_akashml", label: "AkashML", kind: "usd" },
-      { key: "cost_openai", label: "OpenAI", kind: "usd" },
       { key: "priced_on", label: "Prices as of", kind: "text" },
     ],
   },
@@ -578,7 +576,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
 function Value({ v, kind }: { v: unknown; kind: Kind }) {
   if (kind === "text") {
     return typeof v === "string" && v ? (
-      <span className="font-sans font-normal whitespace-normal text-fg">{v}</span>
+      <span className="font-sans font-normal whitespace-normal text-fg">{akashPriceDate(v) ?? v}</span>
     ) : (
       <span className="text-dim">{DASH}</span>
     );
