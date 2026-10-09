@@ -238,6 +238,8 @@ class EvalResult:
     median_sync_contain_ms: Optional[float] = None  # honeytoken / hold / policy denials (no detector in the loop)
     mechanisms: dict[str, int] = field(default_factory=dict)
     prevented_not_quarantined: int = 0  # cases with a denied step but no quarantine
+    attacks_prevented: int = 0  # attack cases quarantined OR with at least one denied step
+    prevention_recall: Optional[float] = None  # attacks_prevented / attack cases
     n_events: int = 0
     n_quick_checks: int = 0
     n_model_calls: int = 0
@@ -814,6 +816,9 @@ async def run_eval(
     result.median_sync_contain_ms = round(float(statistics.median(sync)), 1) if sync else None
     result.mechanisms = dict(Counter(c.mechanism for c in result.cases if c.contained))
     result.prevented_not_quarantined = sum(1 for c in result.cases if not c.contained and c.denied_steps)
+    attacks = [c for c in result.cases if c.label == "attack"]
+    result.attacks_prevented = sum(1 for c in attacks if c.contained or c.denied_steps)
+    result.prevention_recall = ratio(result.attacks_prevented, len(attacks))
 
     checks = [q for c in result.cases for q in c.quick_checks]
     measured: list[tuple[int, int]] | None = None
@@ -854,6 +859,8 @@ def heartbeat_payload(result: EvalResult) -> Heartbeat:
         "fp": result.fp,
         "fn": result.fn,
         "tn": result.tn,
+        "attacks_prevented": result.attacks_prevented,
+        "prevention_recall": result.prevention_recall,
         "cost_akashml": result.cost_akashml,
         "cost_openai": result.cost_openai,
         "priced_on": result.priced_on,
@@ -917,6 +924,7 @@ def render_markdown(result: EvalResult) -> str:
         ["median synchronous containment ms (honeytoken / hold / policy, no detector)", _fmt(result.median_sync_contain_ms, 1)],
         ["containment mechanisms", mech],
         ["denied but not quarantined", str(result.prevented_not_quarantined)],
+        ["attacks prevented (quarantined or action denied)", f"{result.attacks_prevented}/{n_attack} = {_fmt(result.prevention_recall)}"],
         ["events replayed", str(result.n_events)],
         ["quick checks performed", f"{result.n_quick_checks} ({result.n_model_calls} answered by a model)"],
         ["hold mode during the run", _fmt(result.hold_enabled)],
