@@ -1,0 +1,19 @@
+# FROZEN dependency list for BOTH tracks (master plan §8). Owner: Bindu.
+# Mirrors pyproject.toml. Install with `make setup` (uv sync).
+fastapi
+uvicorn[standard]
+pydantic>=2
+pydantic-settings
+clickhouse-connect
+httpx
+sse-starlette
+openai
+sqlglot
+pyyaml
+typer
+loguru
+honcho
+pytest
+pytest-asyncio
+pytest-timeout
+ruff

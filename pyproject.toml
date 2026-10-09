@@ -1,0 +1,43 @@
+[project]
+name = "tripwire"
+version = "0.1.0"
+description = "Tripwire — the immune system for AI-agent fleets"
+requires-python = ">=3.12"
+# FROZEN: mirrors requirements.txt. Change only via a CONTRACT CHANGE REQUEST.
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pydantic-settings",
+    "clickhouse-connect",
+    "httpx",
+    "sse-starlette",
+    "openai",
+    "sqlglot",
+    "pyyaml",
+    "typer",
+    "loguru",
+    "honcho",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "pytest-timeout", "ruff"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 60
+markers = ["e2e: end-to-end tests (need ClickHouse + running services)"]
+addopts = "-m 'not e2e'"
+
+[tool.ruff]
+line-length = 110
+extend-exclude = ["web", "var", "reports"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
