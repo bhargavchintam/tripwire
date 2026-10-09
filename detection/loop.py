@@ -385,6 +385,7 @@ class Detector:
         classify_timeout_s: float = CLASSIFY_TIMEOUT_S,
         seen_max: int = SEEN_MAX,
         retry_after_s: float = RETRY_AFTER_S,
+        ignore_prefixes: tuple[str, ...] | list[str] = (),
         outbreak: bool = False,
         investigator: bool = False,
         quorum: bool = False,
@@ -423,6 +424,10 @@ class Detector:
         self.rules: tuple[str, ...] = tuple(rules)
         self.classify_timeout_s = float(classify_timeout_s)
         self.retry_after_s = float(retry_after_s)
+        # Agent-id prefixes this detector never acts on (the CLI defaults to eval/test agents so a background
+        # detector does not spend minutes classifying rows left behind by an eval run; direct constructions
+        # such as the eval runner and the e2e suites default to no filter).
+        self.ignore_prefixes: tuple[str, ...] = tuple(x for x in ignore_prefixes if x)
         # Documented caches: keys already acted on (LRU set), decided verdicts whose checkpoint POST failed
         # (key -> (payload, retry-at monotonic s); re-sent as-is, never re-classified) and rolling timings.
         self.seen: OrderedDict[str, None] = OrderedDict()
@@ -764,6 +769,7 @@ class Detector:
             "blocks": 0,
             "alerts": 0,
             "skipped": 0,
+            "ignored": 0,
             "conflicts": 0,
             "http_errors": 0,
             "retries": 0,
@@ -806,6 +812,9 @@ class Detector:
             hits = self._hits_for(rule, rows)
             summary["hits"] += len(hits)
             for hit in hits:
+                if self.ignore_prefixes and str(hit.get("agent_id") or "").startswith(self.ignore_prefixes):
+                    summary["ignored"] += 1
+                    continue
                 try:
                     await self._handle_hit(rule, hit, view, detected_at_ms, summary)
                 except Exception as exc:  # noqa: BLE001
@@ -971,15 +980,26 @@ async def _amain(
     outbreak: bool = True,
     investigator: bool = True,
     quorum: bool = False,
+    ignore_prefixes: tuple[str, ...] = (),
 ) -> int:
     """0 on success; with --once, 1 when the pass reported an error (ClickHouse or checkpoint unreachable)."""
     s = get_settings()
     ch = ClickHouseAdapter()
     cp = CheckpointHTTP(checkpoint_url, s.tripwire_token)
     detector = Detector(
-        ch, cp, threshold=threshold, window_s=window_s, rules=rules, outbreak=outbreak, investigator=investigator, quorum=quorum
+        ch,
+        cp,
+        threshold=threshold,
+        window_s=window_s,
+        rules=rules,
+        outbreak=outbreak,
+        investigator=investigator,
+        quorum=quorum,
+        ignore_prefixes=ignore_prefixes,
     )
     _log_startup(detector, checkpoint_url)
+    if detector.ignore_prefixes:
+        logger.info(f"detector: ignoring agent-id prefixes {list(detector.ignore_prefixes)} (--ignore-prefixes '' to disable)")
     try:
         if once:
             summary = await detector.run_once()
@@ -1021,6 +1041,11 @@ def main(
     quorum: bool = typer.Option(
         False, "--quorum", help="classify with the two-model quorum (ai.quorum); single model when not importable"
     ),
+    ignore_prefixes: str = typer.Option(
+        "eval-,test-,acc-,e2e-",
+        "--ignore-prefixes",
+        help="comma-separated agent-id prefixes the background detector ignores (eval/test agents); '' disables",
+    ),
 ) -> None:
     """Run the Tripwire detector against ClickHouse and the checkpoint. Exit 2 on bad arguments."""
     rule_list = tuple(r.strip() for r in rules.split(",") if r.strip())
@@ -1047,6 +1072,7 @@ def main(
                 outbreak=outbreak,
                 investigator=investigator,
                 quorum=quorum,
+                ignore_prefixes=tuple(x.strip() for x in ignore_prefixes.split(",") if x.strip()),
             )
         )
     except KeyboardInterrupt:

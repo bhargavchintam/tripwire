@@ -40,7 +40,7 @@ from loguru import logger
 
 from ai import llm as llm_mod
 from ai import quick_check as qc
-from ai.llm import LLM
+from ai.llm import LLM, provider_extra_body
 from ai.rules import rule_verdict
 from tripwire.contracts import QuickCheckInput, Verdict
 
@@ -91,7 +91,9 @@ async def ask_model(llm: LLM, model: str, inp: QuickCheckInput, timeout_s: float
     ans = ModelAnswer(model=model)
     try:
         messages = qc.build_messages(inp)
-        r = await llm.chat_json(messages, model=model, timeout_s=max(0.05, timeout_s), max_tokens=MAX_TOKENS)
+        r = await llm.chat_json(
+            messages, model=model, timeout_s=max(0.05, timeout_s), max_tokens=MAX_TOKENS, extra_body=provider_extra_body(model)
+        )
         ans.tokens_in, ans.tokens_out = r.tokens_in, r.tokens_out
         parsed = None if r.error else qc.parse_verdict(r.obj)
         if r.error:
@@ -105,7 +107,9 @@ async def ask_model(llm: LLM, model: str, inp: QuickCheckInput, timeout_s: float
                     {"role": "assistant", "content": r.text[:2000] or "(empty)"},
                     {"role": "user", "content": qc.REPAIR_MESSAGE},
                 ]
-                r2 = await llm.chat_json(repair, model=model, timeout_s=remaining, max_tokens=MAX_TOKENS)
+                r2 = await llm.chat_json(
+                    repair, model=model, timeout_s=remaining, max_tokens=MAX_TOKENS, extra_body=provider_extra_body(model)
+                )
                 ans.tokens_in += r2.tokens_in
                 ans.tokens_out += r2.tokens_out
                 parsed = None if r2.error else qc.parse_verdict(r2.obj)

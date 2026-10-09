@@ -120,6 +120,18 @@ def pick_models(ids: list[str]) -> tuple[str, str]:
     return small, large
 
 
+THINKING_MODEL_RE = re.compile(r"(?i)qwen3|glm-")
+
+
+def provider_extra_body(model: str) -> dict[str, Any] | None:
+    """Provider switches a model needs to answer plainly. Qwen3/GLM families on AkashML return EMPTY content
+    unless thinking is disabled (measured 2026-10-09: Qwen3.6-35B-A3B 0.9-1.3 s with it, timeouts without),
+    so production callers pass this through chat_json(extra_body=...). None for every other model."""
+    if THINKING_MODEL_RE.search(model or ""):
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return None
+
+
 class LLM:
     """One OpenAI-compatible endpoint. Pass ``client`` to inject a pre-built AsyncOpenAI (tests)."""
 
@@ -146,9 +158,15 @@ class LLM:
         timeout_s: float,
         max_tokens: int = MAX_TOKENS,
         temperature: float = 0.0,
+        extra_body: dict[str, Any] | None = None,
     ) -> ChatJSON:
-        """One chat completion, parsed as JSON. Never raises; see ChatJSON.error."""
+        """One chat completion, parsed as JSON. Never raises; see ChatJSON.error.
+
+        extra_body (optional, default None = not sent) is passed through to the provider unchanged, e.g.
+        {"chat_template_kwargs": {"enable_thinking": False}} so Qwen3/GLM answer without a thinking preamble
+        (used by eval/model_compare.py; production callers do not pass it)."""
         t0 = time.perf_counter()
+        extra: dict[str, Any] = {"extra_body": extra_body} if extra_body else {}
         try:
             resp = await asyncio.wait_for(
                 self.client.with_options(max_retries=0, timeout=timeout_s).chat.completions.create(
@@ -156,6 +174,7 @@ class LLM:
                     messages=messages,  # type: ignore[arg-type]
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    **extra,
                 ),
                 timeout=timeout_s,
             )

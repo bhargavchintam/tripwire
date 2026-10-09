@@ -41,7 +41,7 @@ from typing import Any
 from loguru import logger
 
 from ai import llm as llm_mod
-from ai.llm import LLM
+from ai.llm import LLM, provider_extra_body
 from ai.rules import rule_verdict
 from tripwire.config import get_settings
 from tripwire.contracts import QuickCheckInput, Verdict, VerdictLabel
@@ -147,7 +147,7 @@ async def classify_with(llm: LLM, model: str, inp: QuickCheckInput, budget_s: fl
         return _fallback(inp, f"provider {llm.provider} is not allowed for verdicts", t0)
     messages = build_messages(inp)
     first_timeout = max(0.05, min(FIRST_TIMEOUT_S, budget_s))
-    r = await llm.chat_json(messages, model=model, timeout_s=first_timeout)
+    r = await llm.chat_json(messages, model=model, timeout_s=first_timeout, extra_body=provider_extra_body(model))
     tokens_in, tokens_out = r.tokens_in, r.tokens_out
     if r.error:
         logger.warning(f"quick_check: {model} failed ({r.error}); rule fallback for {inp.agent_id}/{inp.rule}")
@@ -161,7 +161,7 @@ async def classify_with(llm: LLM, model: str, inp: QuickCheckInput, budget_s: fl
             {"role": "assistant", "content": r.text[:2000] or "(empty)"},
             {"role": "user", "content": REPAIR_MESSAGE},
         ]
-        r2 = await llm.chat_json(repair, model=model, timeout_s=remaining)
+        r2 = await llm.chat_json(repair, model=model, timeout_s=remaining, extra_body=provider_extra_body(model))
         tokens_in += r2.tokens_in
         tokens_out += r2.tokens_out
         if r2.error:

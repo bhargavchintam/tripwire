@@ -392,3 +392,18 @@ def test_rule_secret_exfil_direct_and_denied_privilege_attempts():
     tamper = ev(1, "disable_logging", "cloudtrail:prod-trail", result="denied", reason="hold_policy")
     assert rule_verdict(inp([tamper], rule="log_tamper")).confidence == 0.85
 
+
+
+async def test_thinking_models_get_enable_thinking_false_and_others_do_not():
+    from ai.llm import provider_extra_body
+
+    assert provider_extra_body("Qwen/Qwen3.6-35B-A3B") == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert provider_extra_body("zai-org/GLM-5.3") == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert provider_extra_body("meta-llama/Llama-3.3-70B-Instruct") is None
+    assert provider_extra_body("openai/gpt-oss-120b") is None
+    llm, app = fake_llm([{"json": GOOD}, {"json": GOOD}])
+    await classify_with(llm, "Qwen/Qwen3.6-35B-A3B", inp(chain()))
+    await classify_with(llm, MODEL, inp(chain()))
+    qwen_body, other_body = app.state.calls[0], app.state.calls[1]
+    assert qwen_body.get("chat_template_kwargs") == {"enable_thinking": False}, qwen_body.keys()
+    assert "chat_template_kwargs" not in other_body
