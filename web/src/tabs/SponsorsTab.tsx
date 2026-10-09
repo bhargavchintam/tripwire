@@ -422,15 +422,15 @@ export function SponsorsTab() {
             // live value, and are labelled as such. Only the code_ref row is live.
             <Proof
               kind="receipt"
-              source="Static fact from the committed scan receipt semgrep/FINDINGS.md (re-scan 13:58 PT). Not a live value."
+              source="Static fact from the committed scan receipt semgrep/FINDINGS.md (final re-scan 15:45 PT). Not a live value."
             >
               <div className="px-4 pb-4 pt-2">
                 <p className="text-[14px] leading-[1.6] text-muted">
-                  <span className="num-display text-[28px] text-fg">223</span> files ·{" "}
+                  <span className="num-display text-[28px] text-fg">273</span> files ·{" "}
                   <span className="num-display text-[28px] text-fg">13</span> findings triaged ·{" "}
                   <span className="num-display text-[28px] text-ok">0</span> open true positives (#1 LLM01 fixed)
                 </p>
-                <p className="mt-1.5 font-mono text-[12px] text-dim">receipt: semgrep/FINDINGS.md (re-scan 13:58)</p>
+                <p className="mt-1.5 font-mono text-[12px] text-dim">receipt: semgrep/FINDINGS.md (final re-scan 15:45)</p>
               </div>
               <Rows>
                 <Row
