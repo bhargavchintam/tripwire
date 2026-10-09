@@ -93,9 +93,10 @@ function timingValues(t: unknown): number[] {
   return Object.values(t as Record<string, unknown>).filter((v): v is number => isNum(v) && v >= 0);
 }
 
-/** Live agents only: synthetic background agents are named agent-NN; guardrail replays run as verify:*. */
+/** Live agents only: synthetic background agents are named agent-NN; guardrail replays run as verify:*;
+ *  guild:integration-test is Guild's own integration self-test, not a fleet agent. */
 export const isLiveAgent = (id: string | undefined): id is string =>
-  !!id && !id.startsWith("agent-") && !id.startsWith("verify:");
+  !!id && !id.startsWith("agent-") && !id.startsWith("verify:") && id !== "guild:integration-test";
 
 function addModels(seen: string[], ids: unknown): string[] {
   if (!Array.isArray(ids) || ids.length === 0) return seen;

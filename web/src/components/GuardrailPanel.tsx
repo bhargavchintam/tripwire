@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Ban, CircleCheck, CircleMinus, CircleX, FlaskConical, LoaderCircle, ShieldCheck, ShieldPlus } from "lucide-react";
+import { Ban, CircleCheck, CircleMinus, CircleX, ExternalLink, FlaskConical, LoaderCircle, ShieldCheck, ShieldPlus, UserCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -63,6 +63,8 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
   const [approving, setApproving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [runKey, setRunKey] = useState(0);
+  const [asking, setAsking] = useState(false);
+  const [guildUrl, setGuildUrl] = useState<string | null>(null);
   const proof = local ?? state.guardrails[incidentId]?.proof ?? null;
   const approved = state.guardrails[incidentId]?.approved;
   const gatesDelay = (proof?.gates.length ?? 0) * 0.45;
@@ -76,6 +78,33 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
   const already = (proof?.candidate?.denylist ?? []).filter(
     (h) => incHosts.has(h.toLowerCase()) && !proof?.added_denylist.includes(h),
   );
+
+  /** Human approval step on Guild: the Responder agent drafts the case from this incident and pauses
+   *  on ui_prompt until a person replies APPROVE / REJECT in the Guild session. Applying stays here. */
+  async function askGuild() {
+    if (!proof) return;
+    setAsking(true);
+    try {
+      const steps = (incident?.steps ?? []).slice(-6).map((s) => `${s.action} ${s.target} -> ${s.result}${s.reason ? ` (${s.reason})` : ""}`);
+      const v = incident?.verdict;
+      const caseJson = {
+        incident_id: incidentId,
+        agent_id: incident?.agent_id,
+        report_md:
+          incident?.report_md ||
+          `(no investigator report) rule: ${incident?.rule}; verdict: ${v?.verdict} by ${v?.decision_source}; steps: ${steps.join("; ")}`,
+        proposed_cure: `add ${proof.added_denylist.join(", ") || "no new hosts"} to the fleet denylist (policy v${proof.candidate?.version ?? "?"}); proof gates: ${proof.gates.map((g) => `${g.name}=${g.passed === null ? "skipped" : g.passed ? "pass" : "fail"}`).join(", ")}`,
+      };
+      const r = await api.guildRun({ role: "responder", prompt: JSON.stringify(caseJson) });
+      setGuildUrl(r.session_url ?? null);
+      if (r.status >= 200 && r.status < 300) toast.success("Approval requested from a human in Guild");
+      else toast.error(`Guild answered HTTP ${r.status}`);
+    } catch (e) {
+      toast.error(`Guild request failed: ${(e as Error).message}`);
+    } finally {
+      setAsking(false);
+    }
+  }
 
   async function prove() {
     setProving(true);
@@ -133,6 +162,17 @@ export function GuardrailPanel({ incidentId }: { incidentId: string }) {
             {approving ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}
             {approved ? `Approved · v${approved.policy_version}` : "Approve & restore"}
           </Button>
+          {proof?.all_passed && !approved && (
+            <Button variant="outline" onClick={askGuild} disabled={asking}>
+              {asking ? <LoaderCircle className="animate-spin" /> : <UserCheck />}
+              Ask a human in Guild
+            </Button>
+          )}
+          {guildUrl && (
+            <a href={guildUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-info underline">
+              approval requested in Guild <ExternalLink className="size-3" />
+            </a>
+          )}
           {!proof && !err && (
             <span className="text-xs text-dim">replay refused · normal ops ok · backtest · lint → human approves</span>
           )}

@@ -339,3 +339,20 @@ async def test_snapshot_carries_last_eval_heartbeat(client):
     svc = client._transport.app.state.svc  # type: ignore[attr-defined]
     snap = svc.snapshot()
     assert snap["eval"]["source"] == "eval" and snap["eval"]["metrics"]["tp"] == 2
+
+
+async def test_guild_run_role_responder_picks_the_responder_and_builds_session_link(tmp_path, monkeypatch):
+    posted: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/workspace_agents"):
+            items = [{"id": "wa-2", "agent": {"full_name": "o~tripwire-deploy-bot"}},
+                     {"id": "wa-1", "agent": {"full_name": "o~tripwire-responder"}}]
+            return httpx.Response(200, json={"items": items})
+        posted.append(json.loads(req.content))
+        return httpx.Response(201, json={"id": "s-9"})  # account-key chat sessions return only the id
+
+    async with _guild_app(tmp_path, monkeypatch, handler) as c:
+        out = (await c.post("/guild/run", json={"role": "responder", "prompt": "{\"incident_id\": \"inc-1\"}"})).json()
+    assert out["agent_id"] == "o~tripwire-responder" and posted[0]["initial_prompt"].startswith("{")
+    assert out["session_url"] == "https://app.guild.ai/sessions/s-9"

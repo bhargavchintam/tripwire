@@ -56,6 +56,7 @@ function cleanPolicy(p: Policy): Policy {
 export interface GuildRunResult {
   status: number;
   body: string;
+  session_url?: string | null;
 }
 
 export const api = {
@@ -72,9 +73,14 @@ export const api = {
   heatmap: (hours = 72) => getJSON<FleetHeatmap>(`/fleet/heatmap?hours=${hours}`),
   top: (minutes = 60, limit = 10) => getJSON<FleetTopRow[]>(`/fleet/top?minutes=${minutes}&limit=${limit}`),
   /** Returns the upstream status + body text (truncated); throws ApiError on 503 etc. */
-  guildRun: async (): Promise<GuildRunResult> => {
-    const res = await fetch("/guild/run", { method: "POST", headers: { "content-type": "application/json" } });
-    const text = (await res.text()).slice(0, 2048);
+  guildRun: async (opts?: { role?: "worker" | "responder"; prompt?: string }): Promise<GuildRunResult> => {
+    const res = await fetch("/guild/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: opts ? JSON.stringify(opts) : undefined,
+    });
+    const full = await res.text(); // parse the whole reply; Guild bodies are long and a cut JSON won't parse
+    const text = full.slice(0, 2048);
     if (!res.ok) {
       let detail = text || res.statusText;
       try {
@@ -87,8 +93,9 @@ export const api = {
     }
     // The checkpoint wraps the upstream answer as {status, ok, body}; unwrap it when present.
     try {
-      const b = JSON.parse(text);
-      if (b && typeof b.status === "number") return { status: b.status, body: String(b.body ?? "").slice(0, 2048) };
+      const b = JSON.parse(full);
+      if (b && typeof b.status === "number")
+        return { status: b.status, body: String(b.body ?? "").slice(0, 2048), session_url: b.session_url ?? null };
     } catch {
       /* plain-text passthrough */
     }

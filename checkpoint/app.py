@@ -13,7 +13,7 @@ import importlib.util
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -64,8 +64,9 @@ class ReplayRequest(BaseModel):
 
 
 class GuildRunIn(BaseModel):
-    agent_id: Optional[str] = None  # "owner~agent-name" or UUID; default = first installed agent
+    agent_id: Optional[str] = None  # "owner~agent-name" or UUID; default = picked by role
     prompt: Optional[str] = None
+    role: Literal["worker", "responder"] = "worker"  # worker = …~*deploy-bot, responder = …~*responder
 
 
 # Agent ids end up in URL paths (/block/{agent_id}, /restore/{agent_id}); refuse path-like ids at
@@ -375,9 +376,11 @@ def create_app(
                             status_code=409,
                             content={"detail": "no agent installed in the Guild workspace yet", "agents_status": ra.status_code},
                         )
-                    # Prefer the governed worker (…~tripwire-deploy-bot) over e.g. the Responder; else the first one.
+                    # worker → the governed …~tripwire-deploy-bot; responder → the human-approval …~tripwire-responder;
+                    # else the first installed agent.
                     names = [(it.get("agent") or {}).get("full_name") or it.get("id") for it in items]
-                    agent_id = next((n for n in names if n and n.endswith("deploy-bot")), names[0])
+                    suffix = "responder" if body and body.role == "responder" else "deploy-bot"
+                    agent_id = next((n for n in names if n and n.endswith(suffix)), names[0])
                 r = await c.post(
                     url, auth=basic, json={"session_type": "chat", "agent_id": agent_id, "initial_prompt": prompt}
                 )
@@ -390,7 +393,9 @@ def create_app(
         except httpx.HTTPError as exc:
             return JSONResponse(status_code=502, content={"detail": f"guild trigger unreachable: {type(exc).__name__}"})
         try:
-            session_url = r.json().get("session_url")
+            rj = r.json()
+            # Account-key chat sessions return only the session id; build the app link from it.
+            session_url = rj.get("session_url") or (f"https://app.guild.ai/sessions/{rj['id']}" if rj.get("id") else None)
         except Exception:  # noqa: BLE001
             session_url = None
         return JSONResponse(
