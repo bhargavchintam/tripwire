@@ -31,7 +31,7 @@ export function agentDomId(agentId: string): string {
 const MODE_TONE: Record<AgentMode, Tone> = { normal: "ok", heightened: "held", quarantined: "bad" };
 const MODE_NOTE: Record<AgentMode, string> = {
   normal: "Normal mode: calls pass the checkpoint",
-  heightened: "Heightened scrutiny at the checkpoint",
+  heightened: "On watch: risky sends are held",
   quarantined: "Quarantined: blocked at the checkpoint",
 };
 const HELD_MS = 1200;

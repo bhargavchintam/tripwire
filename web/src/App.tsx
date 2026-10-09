@@ -168,6 +168,14 @@ export default function App() {
       run: () => replayScenario("honeytoken_exfil"),
     },
     {
+      id: "replay:poisoned_ticket",
+      group: "Demo",
+      label: "Replay poisoned_ticket (Act 3 · trace)",
+      icon: Play,
+      keywords: "attack scenario outbreak trace ticket 4821 taint act 3",
+      run: () => replayScenario("poisoned_ticket"),
+    },
+    {
       id: "replay:normal_ops",
       group: "Demo",
       label: "Replay normal_ops",

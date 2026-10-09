@@ -10,6 +10,7 @@ import { cn } from "../lib/utils";
 import { useTripwire } from "../hooks/useTripwire";
 import { AgentStateAtT, TimeScrubber, TimeTravelChip } from "./timetravel/TimeScrubber";
 import { agentStateAt, eventTimes, eventsUpTo } from "./timetravel/timeTravel";
+import { TaintChip, taintOf } from "./incidents/Timeline";
 
 const COLS = "grid grid-cols-[104px_148px_112px_minmax(0,1fr)_136px_108px] items-center gap-3";
 const ROW_H = 40;
@@ -163,6 +164,7 @@ export function EventTable() {
                   const e = rows[item.index];
                   const denied = e.result === "denied";
                   const held = denied && isHoldReason(e.reason);
+                  const taint = taintOf(e);
                   const isFlash = t === null && flash === item.key && e === all[0];
                   return (
                     <div
@@ -208,6 +210,7 @@ export function EventTable() {
                           </Tooltip>
                         ) : null}
                         <span className="truncate">{e.target}</span>
+                        {taint && <TaintChip source={taint} className="max-w-[min(200px,60%)] shrink-0" />}
                       </span>
                       <span className="relative">
                         <ResultBadge result={e.result} reason={e.reason} />
