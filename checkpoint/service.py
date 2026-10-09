@@ -407,6 +407,9 @@ class Checkpoint:
                 reason=p.reason,
                 decision_source=p.decision_source,
                 model_ids=list(p.model_ids),
+                latency_ms=float(p.latency_ms),
+                tokens_in=int(p.tokens_in),
+                tokens_out=int(p.tokens_out),
             )
             inc, _ = self._open_or_update_incident(agent_id, p.rule, verdict, p.last_step_ts_ms, now)
             self._quarantine(agent_id)

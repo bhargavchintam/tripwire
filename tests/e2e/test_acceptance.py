@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
-import inspect
+import os
 import re
 import time
 import uuid
@@ -286,54 +286,58 @@ async def test_a_hold_mode_contain_restore_reblock(env, ch, run):
 # B. detector path (hold OFF)
 # ---------------------------------------------------------------------------
 
-DETECTOR_ENTRY_POINTS = ("run_once", "poll_once", "tick_once", "once")
-CLIENT_PARAMS = ("client", "http", "http_client", "checkpoint", "api")
+class InProcessDetector:
+    """Sripadha's real detection.loop.Detector, pointed at THIS test's in-process checkpoint.
 
+    His CheckpointHTTP accepts an httpx transport, so we hand it the same ASGITransport the
+    test client uses: /status, /block, /alerts and /heartbeat go to the in-process app and never
+    to the live checkpoint on :8000. ClickHouseAdapter reads the same ClickHouse the in-process
+    writer writes to (both follow the CLICKHOUSE_* settings).
 
-def detector_once() -> tuple[Callable[..., Any], str]:
-    """The detector's single-pass entry point and the name of its HTTP-client parameter.
+    Classifier: TRIPWIRE_ACCEPT_CLASSIFY=rule injects his deterministic local rule; anything else
+    (default) lets the Detector resolve its real classify() (AkashML when a key is configured).
+    """
 
-    Skips unless detection/loop.py exists AND exposes a run-once callable that takes an HTTP
-    client: one that only knows CHECKPOINT_URL would post /block to the live checkpoint
-    on :8000, which this in-process test must never touch."""
-    try:
-        spec = importlib.util.find_spec("detection.loop")
-    except (ImportError, ValueError):
-        spec = None
-    if spec is None:
-        pytest.skip("detector not merged yet (Sripadha)")
-    mod = importlib.import_module("detection.loop")
-    for name in DETECTOR_ENTRY_POINTS:
-        fn = getattr(mod, name, None)
-        if not callable(fn):
-            continue
-        params = inspect.signature(fn).parameters
-        client_param = next((p for p in CLIENT_PARAMS if p in params), None)
-        required = [
-            p.name
-            for p in params.values()
-            if p.default is inspect.Parameter.empty
-            and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
-            and p.name != client_param
-        ]
-        if client_param is None or required:
-            pytest.skip(
-                f"detection.loop.{name}{inspect.signature(fn)} cannot be pointed at an in-process "
-                f"checkpoint (needs an HTTP-client parameter named one of {CLIENT_PARAMS})"
-            )
-        return fn, client_param
-    pytest.skip(f"detection/loop.py exposes none of {DETECTOR_ENTRY_POINTS}")
+    def __init__(self, c: httpx.AsyncClient) -> None:
+        try:
+            spec = importlib.util.find_spec("detection.loop")
+        except (ImportError, ValueError):
+            spec = None
+        if spec is None:
+            pytest.skip("detector not merged yet (Sripadha)")
+        loop = importlib.import_module("detection.loop")
+        transport = getattr(c, "_transport", None)
+        assert isinstance(transport, httpx.ASGITransport), "acceptance client must be in-process"
+        self.cp = loop.CheckpointHTTP("http://acc", make_settings().tripwire_token, transport=transport)
+        self.ch = loop.ClickHouseAdapter()
+        classify = None
+        if os.environ.get("TRIPWIRE_ACCEPT_CLASSIFY", "").lower() == "rule":
 
+            async def classify(inp):  # his deterministic rule, async to match ClassifyFn
+                return loop.local_rule_verdict(inp)
 
-async def run_detector(fn: Callable[..., Any], client_param: str, c: httpx.AsyncClient) -> Any:
-    out = fn(**{client_param: c})
-    return await out if inspect.isawaitable(out) else out
+        self.detector = loop.Detector(self.ch, self.cp, classify)
+        self.classify_source = self.detector.classify_source
+
+    async def once(self) -> dict[str, Any]:
+        return await self.detector.run_once()
+
+    async def close(self) -> None:
+        await self.cp.close()
+        await self.ch.close()
 
 
 @pytest.mark.parametrize("run", RUNS)
 async def test_b_detector_blocks_with_hold_off(env, ch, run):
-    fn, client_param = detector_once()
     c, svc = env
+    det = InProcessDetector(c)
+    try:
+        await _detector_path(c, ch, run, det)
+    finally:
+        await det.close()
+
+
+async def _detector_path(c: httpx.AsyncClient, ch: Any, run: int, det: InProcessDetector) -> None:
     a = agent(run, "detect")
     await set_hold(c, False)
     steps = scenario("secret_theft").steps
@@ -342,13 +346,17 @@ async def test_b_detector_blocks_with_hold_off(env, ch, run):
     for step in steps[:3]:
         assert (await tool_step(c, step, a))["result"] == "ok"
     await ch_wait(ch, (a,), lambda rows: len(rows) >= 3)
-    await run_detector(fn, client_param, c)
+    await det.once()
     if a not in (await status(c))["blocked"]:
         # A funnel that needs the external send too: post step 4 (allowed, hold OFF), detect again.
         sent = await tool_step(c, steps[3], a)
         assert sent["result"] == "ok", sent
         await ch_wait(ch, (a,), lambda rows: len(rows) >= 4)
-        await run_detector(fn, client_param, c)
+        for _ in range(3):  # the send must be visible to the detector's read; retry briefly
+            await det.once()
+            if a in (await status(c))["blocked"]:
+                break
+            await asyncio.sleep(1.0)
 
     st = await status(c)
     assert a in st["blocked"] and st["modes"][a] == "quarantined", st

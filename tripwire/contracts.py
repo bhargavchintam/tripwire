@@ -159,6 +159,11 @@ class AlertPayload(BaseModel):
     detected_at_ms: int
     last_step_ts_ms: int
     model_ids: list[str] = Field(default_factory=list)
+    # Added 11:55 (Sripadha's CCR, additive): the detector's measured model cost/latency, carried
+    # into the incident Verdict so incidents don't show 0 next to decision_source=akashml.
+    latency_ms: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 class Heartbeat(BaseModel):
