@@ -69,12 +69,12 @@ const tab = async (page, name) => {
 
 await shoot(1600, 900, path.join(OUT, "thumbnail-16x9.png"));
 await shoot(1500, 1000, path.join(OUT, "thumbnail-3x2.png"));
-await shoot(1600, 1000, path.join(IMG, "04-evidence.jpg"), (p) => tab(p, "Evidence"));
-await shoot(1600, 1000, path.join(IMG, "05-sponsors.jpg"), (p) => tab(p, "Sponsors"));
+await shoot(1600, 1000, path.join(IMG, "17-evidence.jpg"), (p) => tab(p, "Evidence"));
+await shoot(1600, 1000, path.join(IMG, "18-sponsors-semgrep.jpg"), (p) => tab(p, "Sponsors"));
 await browser.close();
 
-// README images stay small (800x500, like the rest of docs/img)
-for (const f of ["04-evidence.jpg", "05-sponsors.jpg"]) {
+// README stills from a live run (the committed docs/img set comes from the final demo take)
+for (const f of ["17-evidence.jpg", "18-sponsors-semgrep.jpg"]) {
   execFileSync("sips", ["-z", "500", "800", path.join(IMG, f)], { stdio: "ignore" });
 }
 console.log(`incident ${inc.id}: ${inc.verdict.decision_source} · ${inc.verdict.model_ids?.join(", ")}`);
