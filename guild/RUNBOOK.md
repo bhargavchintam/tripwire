@@ -8,7 +8,11 @@ Who runs each step:
 - **[CLAUDE]** can be pasted into a Claude session.
 - **[CLAUDE, OK first]** means Claude should ask before running it, because it installs something or creates something in Guild.
 
-## Current state (13:10 PT) — DONE, keep it running
+## Current state (Oct 10, 11:21 PT): re-pointed to integration `tripwire2`
+
+- Cloudflare dropped the original quick tunnel overnight (`Unauthorized: Tunnel not found`), so the frozen URL of integration `bindubhargavareddy~tripwire` is dead. Following steps 5–9 below: new tunnel (in `var/run/tunnel_url`), new integration `bindubhargavareddy~tripwire2` v1.0.0 published with that base URL and the same proxy credential, Guild version test 200, and `tripwire-deploy-bot` re-published from `guild/agent/` (now referencing `tripwire2`). `/guild/run` verified: `read_file`, `run_command`, internal `http_post` all `ok` within 6 s.
+
+## Earlier state (Oct 9, 13:10 PT)
 
 - Integration `bindubhargavareddy~tripwire` v1.0.0 **published** (operation `tool` → tool name `tripwire_tool`), base URL = the quick tunnel in `var/run/tunnel_url` (frozen). Credential = `~/.tripwire-guild-proxy-token`.
 - Agent `bindubhargavareddy~tripwire-deploy-bot` (Native, the one created in the UI) **re-published** from `guild/agent/` with the integration attached; `/guild/run` now prefers it over `tripwire-responder`.

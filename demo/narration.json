@@ -54,7 +54,7 @@
       "clip": "clip03_prevent.mp4",
       "screen": "Hold ON. Press R. Watch deploy-bot: HELD → DENIED stamp, card turns red (Quarantined), toast with AkashML, KPI Hold decision fills.",
       "caption": "Held before it runs · AkashML decides",
-      "text": "Hold mode is on. I replay the attack. deploy bot reads the env file, encodes the secrets, and tries to send them. [excited] Held, and denied, before it ever runs! An Akash ML model made that call in under two seconds, and the agent is quarantined."
+      "text": "Hold mode is on. I replay the attack. deploy bot reads the env file, encodes the secrets, and tries to send them. [excited] Held, and denied, before it ever runs! An Akash ML model made that call in about two seconds, and the agent is quarantined."
     },
     {
       "id": "s04_trip",
@@ -70,7 +70,7 @@
       "clip": "clip05_trace.mp4",
       "screen": "Press 0, then H so Hold is OFF. ⌘K → Replay poisoned_ticket (Act 3 · trace). Point at 'from ticket:4821' chips, the attack chain lighting, deploy-bot quarantined, support-bot amber (On watch), its partner-sync send HELD · DENIED, and the Outbreak trace panel.",
       "caption": "Detector · trace · exposed agent held",
-      "text": "Now the hard case. Hold mode is off, and two agents read that ticket. Our agents tag every action after that read with where it came from, and the attack chain lights up step by step. [excited] The detector spots deploy bot in under a second. Then Tripwire traces patient zero: support bot read the same ticket, so it goes on heightened watch, and the attacker's domain is blocked fleet-wide. So when support bot tries to send data out... it's held, and denied."
+      "text": "Now the hard case. Hold mode is off, and two agents read that ticket. Our agents tag every action after that read with where it came from, and the attack chain lights up step by step. [excited] The detector spots deploy bot in about a second. Then Tripwire traces patient zero: support bot read the same ticket, so it goes on heightened watch, and the attacker's domain is blocked fleet-wide. So when support bot tries to send data out... it's held, and denied."
     },
     {
       "id": "s06_explain",

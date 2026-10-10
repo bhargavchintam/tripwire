@@ -233,6 +233,10 @@ await api("/demo/reset?full=1", { method: "POST" });
 await api("/config/hold", { method: "POST", body: JSON.stringify({ enabled: true }) });
 await page.reload({ waitUntil: "load" }); // remount: the orbit's "calls since opened" starts at 0
 await sleep(3000);
+await tab("Fleet"); // warm the /fleet/heatmap query so s01 shows the heatmap drawn, not a skeleton
+await sleep(4000);
+await tab("Live");
+await sleep(1500);
 const mcp = startMcp();
 if (!(await mcp.ready)) console.log("WARNING: MCP server did not initialise; s09 will not show MCP calls");
 const oc = await orbitCentre();
@@ -431,7 +435,9 @@ await segment("s08_guild", async (rec) => {
   // "This Guild agent's tool calls flow through the very same checkpoint." Cut the wait until two
   // of its calls have arrived, then keep real time so the next one lands on camera.
   const cutFrom = now();
-  await waitFor(async () => (await page.locator("tr", { hasText: "guild:deploy-bot" }).count()) >= 2, 120000, 500);
+  const guildRows = () =>
+    page.evaluate(() => [...document.querySelectorAll('div[class*="grid-cols-[104px"]')].filter((el) => el.textContent.includes("guild:deploy-bot")).length);
+  await waitFor(async () => (await guildRows()) >= 2, 120000, 400);
   if (now() - cutFrom > 1.5) rec.cuts.push([cutFrom, now() - 0.6]);
 });
 
@@ -466,8 +472,10 @@ await segment("s09_copilot_mcp", async (rec) => {
 
 await segment("s10_proof", async ({ at }) => {
   await tab("Evidence"); // "Every number here is measured,"
-  await at(1.7); // "...with its receipt."
-  await glide(page.getByText("Precision", { exact: true }));
+  await at(1.7); // "...with its receipt." -> the Source tooltip of the first metric (Precision)
+  const src = page.getByRole("button", { name: "Source" }).first();
+  await glide(src);
+  await src.hover().catch(() => {});
   await at(3.2); // "On sixty development cases, Tripwire caught all thirty attacks with zero false positives."
   await center(page.getByText("True positive", { exact: true }));
   await glide(page.getByText("True positive", { exact: true }));

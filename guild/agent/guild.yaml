@@ -5,5 +5,5 @@
 # If the tunnel URL ever changes, a NEW integration is needed (URLs freeze at first publish):
 # change `name` below to the new integration (e.g. bindubhargavareddy~tripwire2) and re-save.
 integrations:
-  - name: bindubhargavareddy~tripwire
+  - name: bindubhargavareddy~tripwire2
     version: ^1.0.0
