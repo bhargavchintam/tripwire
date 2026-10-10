@@ -94,7 +94,7 @@ export function HoldPill() {
 export function PresenterPill() {
   const presenter = usePresenter();
   return (
-    <Tooltip content="Presenter mode: bigger type, hides the event table and secondary panels. Shortcut: P">
+    <Tooltip content="Presenter mode: bigger type, a slim live list instead of the full table, fewer secondary panels. Shortcut: P">
       <button
         onClick={presenter.toggle}
         aria-pressed={presenter.on}

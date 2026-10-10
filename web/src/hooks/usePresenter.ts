@@ -1,4 +1,5 @@
-// Presenter mode: ~125% type, hides the event table and secondary panels. Toggle: P or the header button.
+// Presenter mode: ~125% type, a slim live list (EventTable slim) instead of the full table and feed, fewer
+// secondary panels. Toggle: P or the header button.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 const KEY = "tripwire.presenter";

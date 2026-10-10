@@ -14,7 +14,8 @@ import { TaintChip, taintOf } from "./incidents/Timeline";
 
 const COLS = "grid grid-cols-[104px_148px_112px_minmax(0,1fr)_136px_108px] items-center gap-3";
 const ROW_H = 40;
-/** Rows kept in presenter mode (P): enough for the Act 3 chain and its "from ticket:4821" chips. */
+/** Rows kept in presenter mode (P): the newest calls (in Act 3, deploy-bot's attack and support-bot's held
+ * send, with their "from ticket:4821" chips; the two ticket reads stay visible in the ticket exhibit). */
 const SLIM_ROWS = 6;
 
 /**
@@ -144,7 +145,7 @@ export function EventTable({ slim = false }: { slim?: boolean } = {}) {
           <div ref={parentRef} className={cn(slim ? "h-[240px]" : "h-[400px]", "overflow-y-auto")}>
             {loading ? (
               <div role="status" aria-label="Loading events" className="flex flex-col">
-                {Array.from({ length: 8 }, (_, i) => (
+                {Array.from({ length: slim ? SLIM_ROWS : 8 }, (_, i) => (
                   <div key={i} className={`${COLS} h-10 border-b border-line/70 px-4`}>
                     <Skeleton className="h-3 w-16" />
                     <Skeleton className="h-3 w-20" />
@@ -198,15 +199,19 @@ export function EventTable({ slim = false }: { slim?: boolean } = {}) {
                       )}
                       <span className="relative font-mono text-[12px] text-dim tabular-nums">{fmtClock(e.ts_ms)}</span>
                       <span className="relative min-w-0">
-                        <Tooltip content={active === e.agent_id ? "Show all agents" : `Show only ${e.agent_id}`} delay={400}>
-                          <button
-                            type="button"
-                            onClick={() => toggle(e.agent_id)}
-                            className="-mx-1.5 max-w-full cursor-pointer truncate rounded-md px-1.5 py-0.5 text-left font-medium text-fg transition-colors duration-150 hover:bg-panel hover:text-brand group-hover/row:bg-panel/60"
-                          >
-                            {e.agent_id}
-                          </button>
-                        </Tooltip>
+                        {slim ? (
+                          <span className="block truncate font-medium text-fg">{e.agent_id}</span>
+                        ) : (
+                          <Tooltip content={active === e.agent_id ? "Show all agents" : `Show only ${e.agent_id}`} delay={400}>
+                            <button
+                              type="button"
+                              onClick={() => toggle(e.agent_id)}
+                              className="-mx-1.5 max-w-full cursor-pointer truncate rounded-md px-1.5 py-0.5 text-left font-medium text-fg transition-colors duration-150 hover:bg-panel hover:text-brand group-hover/row:bg-panel/60"
+                            >
+                              {e.agent_id}
+                            </button>
+                          </Tooltip>
+                        )}
                       </span>
                       <span className="relative truncate font-mono text-[12.5px] text-fg">{e.action}</span>
                       <span className="relative flex min-w-0 items-center gap-1.5 font-mono text-[12.5px] text-muted" title={e.target}>
