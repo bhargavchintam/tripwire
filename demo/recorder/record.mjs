@@ -13,7 +13,7 @@
 // retaken so the narration ("an Akash ML model made that call") stays true.
 // Every action is a real click or keypress on the real console; nothing on screen is staged.
 import { chromium } from "playwright";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,11 @@ const sheetSection = (label) =>
 async function segment(id, act, { extra = 0, retakes = 2 } = {}) {
   for (let attempt = 0; attempt <= retakes; attempt++) {
     const rec = { id, attempt, start: now(), cuts: [] };
+    const shownNow = () => now() - rec.start - rec.cuts.reduce((a, [s, e]) => a + (e - s), 0);
+    rec.at = async (t) => {
+      const wait = t - shownNow();
+      if (wait > 0) await sleep(wait * 1000);
+    };
     const ok = await act(rec);
     const cutTotal = rec.cuts.reduce((a, [s, e]) => a + (e - s), 0);
     const need = DUR[id] + GAP + extra + 0.6;
@@ -131,6 +136,92 @@ async function segment(id, act, { extra = 0, retakes = 2 } = {}) {
   throw new Error(`${id}: still not right after ${retakes} retakes`);
 }
 
+
+// ---------------------------------------------------------------- choreography helpers
+// Scroll an element to the middle of the viewport: key content stays clear of the video's
+// lower-third caption (y ≈ 918-1016 in the 1080p frame).
+const center = async (locator) => {
+  await locator.first().evaluate((el) => el.scrollIntoView({ block: "center", behavior: "smooth" }), SHORT).catch(() => {});
+  await sleep(650);
+};
+const centerText = (text) => center(page.getByText(text, { exact: false }));
+const park = () => page.mouse.move(1880, 610, { steps: 8 }); // empty right margin: no hover tooltips
+// The orbit SVG is the largest SVG on the Live tab; its centre is the checkpoint shield.
+const orbitCentre = () =>
+  page.evaluate(() => {
+    let best = null;
+    for (const s of document.querySelectorAll("svg")) {
+      const r = s.getBoundingClientRect();
+      if (!best || r.width * r.height > best.a) best = { a: r.width * r.height, x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }
+    return best;
+  });
+// First event of /stream = the checkpoint's full-state snapshot (recent events, incidents, status).
+async function snapshot() {
+  const ctrl = new AbortController();
+  const r = await fetch(`${BASE}/stream`, { headers: { accept: "text/event-stream" }, signal: ctrl.signal });
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return null;
+      buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      const at = buf.indexOf("event: snapshot");
+      const end = at >= 0 ? buf.indexOf("\n\n", at) : -1;
+      if (end > 0) {
+        const data = buf.slice(at, end).split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+        return JSON.parse(data).data;
+      }
+    }
+  } finally {
+    ctrl.abort();
+  }
+}
+// A real MCP client: Tripwire's own MCP server (tripwire/mcp_server.py) over stdio, as Claude Code
+// would run it, so the s09 line about MCP agents is shown happening, not just said.
+function startMcp() {
+  const proc = spawn("uv", ["run", "--quiet", "python", "-m", "tripwire.mcp_server"], {
+    cwd: ROOT,
+    env: { ...process.env, TRIPWIRE_MCP_AGENT: "claude-code" },
+  });
+  let buf = "";
+  let id = 0;
+  const waiting = new Map();
+  proc.stdout.on("data", (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf("\n")) >= 0; ) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      try {
+        const m = JSON.parse(line);
+        waiting.get(m.id)?.(m);
+      } catch {}
+    }
+  });
+  proc.stderr.on("data", () => {});
+  const rpc = (method, params) =>
+    new Promise((res) => {
+      const i = ++id;
+      waiting.set(i, res);
+      proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: i, method, params }) + "\n");
+      setTimeout(() => res(null), 15000);
+    });
+  const ready = rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "tripwire-demo", version: "1" } }).then(
+    (r) => {
+      proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+      return !!r?.result;
+    },
+  );
+  return {
+    ready,
+    call: async (action, target) => (await rpc("tools/call", { name: "tripwire_tool", arguments: { action, target } }))?.result?.structuredContent ?? null,
+    close: () => proc.kill(),
+  };
+}
+
 // ---------------------------------------------------------------- warm-up (before the first segment: never in the video)
 await page.goto(BASE, { waitUntil: "networkidle" });
 await api("/demo/reset?full=1", { method: "POST" });
@@ -138,214 +229,269 @@ await api("/config/hold", { method: "POST", body: JSON.stringify({ enabled: true
 const warm = await api("/demo/replay", { method: "POST", body: JSON.stringify({ scenario: "secret_theft" }) });
 await waitFor(async () => (await api(`/demo/replay/${warm.run_id}`)).status !== "running", 20000);
 await sleep(2500);
-await key("0");
-await sleep(2500);
-await hold(true);
-await scrollTop();
+await api("/demo/reset?full=1", { method: "POST" });
+await api("/config/hold", { method: "POST", body: JSON.stringify({ enabled: true }) });
+await page.reload({ waitUntil: "load" }); // remount: the orbit's "calls since opened" starts at 0
+await sleep(3000);
+const mcp = startMcp();
+if (!(await mcp.ready)) console.log("WARNING: MCP server did not initialise; s09 will not show MCP calls");
+const oc = await orbitCentre();
+if (oc) await page.mouse.move(oc.x, oc.y);
 await cdp.send("Page.startScreencast", SCREENCAST);
 await sleep(2000);
 
+let incidentId = null;
 try {
 
 // ---------------------------------------------------------------- the take
-await segment("s00_hook", async () => {
-  await glide(page.locator("svg").filter({ has: page.locator("circle") }));
-  await sleep(4500);
-  await glide(page.getByRole("button", { name: /Replay attack/ }));
-});
-
-await segment("s01_fleet", async () => {
-  await glide(page.getByText("Detector", { exact: false }));
-  await sleep(2500);
-  await scrollTo("Events stored");
-  await sleep(2500);
-  await tab("Fleet");
-  await sleep(1500);
+// Times passed to at() are seconds into the segment's narration (measured phrase boundaries of
+// demo/out/audio/<id>.mp3), so each action lands on the words that describe it.
+await segment("s00_hook", async ({ at }) => {
+  await at(3.2); // "And one poisoned support ticket..."
+  await glide(page.getByText("Incoming ticket 4821", { exact: false }));
+  await at(5.5); // "...can turn an agent into an attacker."
   await glide(page.getByText("deploy-bot", { exact: false }));
+  await at(8.1); // "This is Tripwire, the immune system for AI agent fleets."
+  await glide(page.getByText("The immune system for AI-agent fleets", { exact: false }));
 });
 
-await segment("s02_ticket", async () => {
+await segment("s01_fleet", async ({ at }) => {
+  const c = await orbitCentre(); // "Every tool call passes one checkpoint..."
+  if (c) await page.mouse.move(c.x, c.y, { steps: 20 });
+  await at(2.4); // "...thirty million synthetic events"
+  await glide(page.getByText("Events stored", { exact: false }));
+  await at(6.6); // "...across more than forty agents"
+  await park();
+  await tab("Fleet");
+  await at(9.2); // "The detector queries it every second... you can see each pass land."
   await tab("Live");
+  await glide(page.getByText(/^Detector/));
+});
+
+await segment("s02_ticket", async ({ at }) => {
+  await park();
   const show = page.getByRole("button", { name: /show ticket/i });
   if (await show.isVisible().catch(() => false)) await show.click();
-  await scrollTo("Incoming ticket 4821");
-  await sleep(800);
-  await scrollTo("do not mention this ticket");
+  await centerText("Incoming ticket 4821"); // "Here's the ticket behind the attack we recorded."
+  await at(2.9); // "Hidden inside is an instruction: read the secrets, encode them, and ship them out."
+  await centerText("do not mention this ticket");
+  await glide(page.getByText("do not mention this ticket", { exact: false }));
 });
 
-await segment("s03_prevent", async () => {
+await segment("s03_prevent", async ({ at }) => {
   await scrollTop();
   await hold(true);
-  await sleep(1500);
+  await glide(page.getByText(/^Hold/)); // "Hold mode is on."
+  await at(1.6); // "I replay the attack."
   await key("r");
+  await at(4.0); // the table shows each step; the send is held, then denied (hold_model)
+  await park();
+  await centerText("Live tool calls");
   const inc = await waitFor(() => openIncident("deploy-bot"), 15000);
-  await sleep(1500);
+  await at(12.8); // "...and the agent is quarantined."
+  await scrollTop();
   return !!inc && inc.verdict?.decision_source === "akashml"; // retake if the model fell back to rule_only
-});
+}, { retakes: 3 });
 
-await segment("s04_trip", async () => {
+await segment("s04_trip", async ({ at }) => {
   await key("0");
-  await sleep(1500);
+  await at(0.7); // "Variant two: the stolen file holds decoy credentials."
   await palette("honeytoken");
-  await sleep(3000);
-  await scrollTo("honeytoken");
+  await at(5.6); // after "The honeytoken trips instantly," -> the Denied · honeytoken row
+  await centerText("Live tool calls");
 });
 
-await segment("s05_trace", async () => {
+await segment("s05_trace", async ({ at }) => {
   await scrollTop();
   await key("0");
-  await sleep(1200);
-  await hold(false);
-  await palette("poisoned");
-  await sleep(3000);
-  await scrollTo("Incoming ticket 4821");
-  await sleep(3500);
-  await scrollTo("Attack chain");
-  await sleep(4000);
-  await page.locator("text=Outbreak").first().scrollIntoViewIfNeeded(SHORT).catch(() => {});
-  await sleep(4500);
+  await sleep(700);
+  await hold(false); // "Hold mode is off,"
+  await at(1.6);
+  await palette("poisoned"); // "...and two agents read that ticket."
+  await at(4.7); // "Our agents tag every action after that read with where it came from,"
+  await centerText("Live tool calls");
+  await at(8.6); // "...and the attack chain lights up step by step."
+  await centerText("Attack chain");
+  await at(11.5); // "The detector spots deploy bot in about a second."
   await scrollTop();
-  await sleep(1500);
-  const inc = await waitFor(() => openIncident("deploy-bot"), 15000);
+  await at(14.4); // "Then Tripwire traces patient zero: ... blocked fleet-wide."
+  await centerText("Outbreak traced");
+  await at(22.0); // "So when support bot tries to send data out... it's held, and denied."
+  await scrollTop();
+  const inc = await waitFor(() => openIncident("deploy-bot"), 10000);
   const st = await api("/status");
-  return !!inc && inc.verdict?.decision_source === "akashml" && !!inc.outbreak && st.modes["support-bot"] === "heightened";
-});
+  const snap = await snapshot().catch(() => null);
+  const supportDenied = (snap?.recent_events ?? []).some(
+    (e) => e.agent_id === "support-bot" && /partner-sync/.test(e.target ?? "") && e.result === "denied",
+  );
+  console.log(`s05 check: verdict ${inc?.verdict?.decision_source}, outbreak ${!!inc?.outbreak}, support-bot ${st.modes["support-bot"]}, partner-sync denied ${supportDenied}`);
+  return !!inc && inc.verdict?.decision_source === "akashml" && !!inc.outbreak && st.modes["support-bot"] === "heightened" && supportDenied;
+}, { retakes: 3 });
 
-let incidentId = null;
 await segment("s06_explain", async (rec) => {
   incidentId = (await openIncident("deploy-bot"))?.id;
-  await tab("Incidents");
+  await tab("Incidents"); // "Open the incident."
   await page.locator('[aria-label^="Open incident"][aria-label$="on deploy-bot"]').first().click();
-  await sleep(4000);
-  await sheetSection("Timeline").first().click(SHORT).catch(() => {});
-  await sleep(3500);
+  await park();
+  await rec.at(5.5); // "And an investigator model wrote this report itself,"
   const t = now();
   await waitFor(async () => (await api(`/incidents/${incidentId}`)).report_md, 30000);
-  if (now() - t > 1.5) rec.cuts.push([t + 0.5, now()]);
+  if (now() - t > 1.5) rec.cuts.push([t + 0.3, now()]);
   await sheetSection("Report").first().click(SHORT).catch(() => {});
+  await rec.at(9.0); // "...with every query behind it listed as a receipt."
+  await sheetSection("Receipts").first().click(SHORT).catch(() => {});
 });
 
 await segment("s07_cure", async (rec) => {
-  await sheetSection("Cure").first().click(SHORT).catch(() => {});
-  await sleep(800);
+  const { at } = rec;
+  await sheetSection("Cure").first().click(SHORT).catch(() => {}); // "Before the agent comes back,"
+  await at(1.0);
+  await glide(page.getByRole("button", { name: /Prove guardrail/ }));
+  await at(2.4); // "Tripwire proves the cure."
   await page.getByRole("button", { name: /Prove guardrail/ }).click();
   const ask = page.getByRole("button", { name: /Ask a human in Guild/ });
   const t0 = now();
   await ask.waitFor({ state: "visible", timeout: 30000 });
-  if (now() - t0 > 4.5) rec.cuts.push([t0 + 3.5, now() - 0.5]); // keep ~3.5 s of the proof landing
-  await sleep(2500); // the four gates + backtest card on screen
+  if (now() - t0 > 4) rec.cuts.push([t0 + 2.5, now() - 0.5]); // a slow proof: keep its first 2.5 s
+  await park();
+  await at(8.4); // "...and the rule is backtested over thirty million events in under a second."
+  await centerText("Backtest of the candidate");
+  await at(12.4); // "Then a human approves it in Guild..."
+  await center(ask);
   await ask.click();
   const link = await waitFor(async () => page.locator('a[href*="app.guild.ai/sessions/"]').first().getAttribute("href", SHORT), 30000);
   if (!link) throw new Error("no Guild session link appeared");
   const sid = link.split("/").pop();
-  await sleep(2000);
-  // The human step. Frame capture pauses while we wait (the wait is cut anyway); the Responder must
-  // have posted its question before a reply counts, so the link opens only after that.
+  await sleep(500);
+  // The human step. Frame capture pauses while we wait (the wait is cut). The reply that reliably
+  // reaches the paused Responder is the human's own Guild CLI (logged in as them, recorded as
+  // EntPersonalUser); in our runs the web box did not deliver it. We only prepare the command
+  // (clipboard + notification); the human runs it, in their own terminal.
   const cutFrom = now();
   await cdp.send("Page.stopScreencast");
   await sleep(9000); // the Responder posts its question ~7 s after the session starts
-  // The reply that reliably reaches the paused Responder is the human's own Guild CLI (logged in as
-  // them, recorded as EntPersonalUser); in our runs the web box did not deliver it. We only prepare the
-  // command (clipboard + notification); the human runs it, in their own terminal.
   const cmd = `guild session send ${sid} --message "APPROVE"`;
   let opened = false;
-  const ask_human = () => {
+  const askHuman = () => {
     if (!opened) {
       execFileSync("open", [link]); // once, so the case can be read; later reminders only notify
-      try { execFileSync("pbcopy", { input: cmd }); } catch {}
+      try {
+        execFileSync("pbcopy", { input: cmd });
+      } catch {}
     }
     opened = true;
     notify(`Approve in your own terminal (copied to clipboard): ${cmd}   case: ${link}`);
   };
-  ask_human();
-  let lastAsk = Date.now();
-  let decided = null;
-  const deadline = Date.now() + 60 * 60 * 1000;
   // Another client resetting the console mid-take deletes this incident; then "Approve & restore"
   // would 404 on camera. Stop at once instead (seen in take 3: a full reset at 00:11 UTC).
   const incidentAlive = async () => {
     const r = await fetch(`${BASE}/incidents/${incidentId}`).catch(() => null);
     return !r || r.status !== 404;
   };
+  askHuman();
+  let lastAsk = Date.now();
+  let decided = null;
+  const deadline = Date.now() + 60 * 60 * 1000;
   while (!decided && Date.now() < deadline) {
     if (!(await incidentAlive())) throw new Error(`incident ${incidentId} was removed during the take (someone reset the console); retake with nobody else on :8000`);
     const d = await api(`/guild/session/${sid}/decision`).catch(() => null);
     if (d?.status === "approved") decided = d;
     else if (d?.status === "rejected") throw new Error("the Guild reply was REJECT; rerun and reply APPROVE");
     else if (Date.now() - lastAsk > 180000) {
-      ask_human();
+      askHuman();
       lastAsk = Date.now();
     }
     if (!decided) await sleep(2500);
   }
   if (!decided) throw new Error("no human approval arrived in Guild within 60 minutes");
-  await cdp.send("Page.startScreencast", SCREENCAST);
   await page.getByText(/Approved in Guild by a human/).first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
-  rec.cuts.push([cutFrom, now() - 0.3]);
+  await centerText("Approved in Guild by a human");
+  await cdp.send("Page.startScreencast", SCREENCAST);
+  await sleep(300);
+  rec.cuts.push([cutFrom, now() - 0.2]);
   console.log(`approval read back from Guild (${decided.decided_by}: ${decided.operator_reply}), wait cut`);
-  await sleep(3000); // the read-back chip: "Approved in Guild by a human"
+  await at(17.2); // "...and one click restores the agent."
   if (!(await incidentAlive())) throw new Error(`incident ${incidentId} was removed during the take; retake`);
   await page.getByRole("button", { name: /Approve & restore/ }).click();
-  // the approval must really succeed on camera (policy version bumps, agent restored)
   const restored = await waitFor(async () => (await api("/status")).modes["deploy-bot"] !== "quarantined", 8000, 400);
   if (!restored) throw new Error("Approve & restore did not restore deploy-bot");
-  await sleep(2500);
 });
 
 await segment("s08_guild", async (rec) => {
   await key("Escape");
-  await sleep(500);
-  await tab("Sponsors");
-  await scrollTo("Run Guild agent");
+  await tab("Sponsors"); // "Agents hosted on Guild can be governed the same way."
+  await center(page.getByRole("button", { name: /Run Guild agent/ }));
+  await glide(page.getByRole("button", { name: /Run Guild agent/ }));
+  await rec.at(1.6);
   await page.getByRole("button", { name: /Run Guild agent/ }).click();
-  await sleep(1200);
+  await rec.at(2.4);
+  await park();
   await tab("Live");
-  await scrollTop();
+  await centerText("Live tool calls");
+  // "This Guild agent's tool calls flow through the very same checkpoint." Cut the wait until two
+  // of its calls have arrived, then keep real time so the next one lands on camera.
   const cutFrom = now();
-  // wait for the Guild-hosted agent's first real tool call through the checkpoint (its card fills in)
-  await page.getByText("no calls on the stream yet").first().waitFor({ state: "detached", timeout: 120000 }).catch(() => {});
-  if (now() - cutFrom > 1.5) rec.cuts.push([cutFrom, now() - 0.8]);
-  await sleep(4500);
+  await waitFor(async () => (await page.locator("tr", { hasText: "guild:deploy-bot" }).count()) >= 2, 120000, 500);
+  if (now() - cutFrom > 1.5) rec.cuts.push([cutFrom, now() - 0.6]);
 });
 
 await segment("s09_copilot_mcp", async (rec) => {
-  await tab("Policy");
+  const { at } = rec;
+  await tab("Policy"); // "Need a new rule? Just describe it."
   const box = page.getByLabel("Describe the policy change in plain English");
-  await box.scrollIntoViewIfNeeded(SHORT).catch(() => {});
+  await center(box);
   await box.click();
-  await page.keyboard.type("Block uploads to paste.example-uploads.net for every agent", { delay: 22 });
-  await page.getByRole("button", { name: /Draft policy/ }).click();
+  await page.keyboard.type("Block uploads to paste.example-uploads.net for every agent", { delay: 14 });
+  await page.getByRole("button", { name: /Draft policy/ }).click(); // "The copilot drafts a validated preview,"
   const t0 = now();
   await page.getByLabel("Changes in the preview").first().waitFor({ state: "visible", timeout: 45000 }).catch(() => {});
-  if (now() - t0 > 2.5) rec.cuts.push([t0 + 1.2, now() - 0.4]);
-  await sleep(3000);
-  await page.mouse.click(8, 300);
-  await key("v"); // the voice announcer toggle (optional feature) on ...
-  await sleep(1400);
+  if (now() - t0 > 1.6) rec.cuts.push([t0 + 0.8, now() - 0.3]);
+  await center(page.getByLabel("Changes in the preview")); // "...and never applies it on its own."
+  await park();
+  await at(5.4);
+  await key("v"); // the spoken-alerts toggle (optional feature) on ...
+  await at(6.2);
   await key("v"); // ... and off again
+  await at(6.8); // "And our MCP server lets an MCP agent, like Claude Code,"
+  await tab("Live");
+  await centerText("Live tool calls");
+  await at(8.0);
+  const r1 = await mcp.call("read_file", "README.md");
+  await at(9.6); // "...ask Tripwire before it acts."
+  const r2 = await mcp.call("assume_role", "arn:aws:iam::123456789012:role/prod-admin");
+  console.log(`s09 MCP: read_file -> ${r1?.result}, assume_role -> ${r2?.result} ${r2?.reason ?? ""}`);
+});
+
+await segment("s10_proof", async ({ at }) => {
+  await tab("Evidence"); // "Every number here is measured,"
+  await at(1.7); // "...with its receipt."
+  await glide(page.getByText("Precision", { exact: true }));
+  await at(3.2); // "On sixty development cases, Tripwire caught all thirty attacks with zero false positives."
+  await center(page.getByText("True positive", { exact: true }));
+  await glide(page.getByText("True positive", { exact: true }));
+  await at(6.6);
+  await glide(page.getByText("False positive", { exact: true }));
+  await at(9.8); // "To be clear, that's our development set... not a held out test."
+  await glide(page.getByText(/not held-out/));
+});
+
+await segment("s11_close", async ({ at }) => {
+  await tab("Sponsors"); // "Semgrep scanned our own AI written code and found a real prompt injection flaw."
+  await centerText("Our own code, scanned");
+  await at(2.6); // "We fixed it."
+  await glide(page.getByText("open true positives", { exact: false }));
+  await at(6.2); // "Tripwire: prevent, trip, trace, and cure, with proof." -> rewind the session's real calls
+  await park();
   await tab("Live");
   const slider = page.getByLabel("Time travel through this session's tool calls");
-  await slider.scrollIntoViewIfNeeded(SHORT).catch(() => {});
-  await sleep(400);
+  await center(slider);
   const b = await slider.boundingBox(SHORT).catch(() => null);
   if (b) {
-    await page.mouse.move(b.x + b.width - 4, b.y + b.height / 2, { steps: 10 });
+    await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2, { steps: 8 });
     await page.mouse.down();
-    await page.mouse.move(b.x + b.width * 0.35, b.y + b.height / 2, { steps: 40 });
+    await page.mouse.move(b.x + b.width * 0.3, b.y + b.height / 2, { steps: 90 });
     await page.mouse.up();
   }
-});
-
-await segment("s10_proof", async () => {
-  await tab("Evidence");
-  await sleep(4000);
-  await scrollTo("Confusion matrix");
-});
-
-await segment("s11_close", async () => {
-  await tab("Sponsors");
-  await sleep(1500);
-  await scrollTo("Semgrep");
 }, { extra: END_CARD });
 
 log.finished = new Date().toISOString();
@@ -357,6 +503,7 @@ log.finished = new Date().toISOString();
   await cdp.send("Page.stopScreencast").catch(() => {});
   await pending;
   saveLog();
+  mcp.close();
 }
 await context.close();
 await browser.close();

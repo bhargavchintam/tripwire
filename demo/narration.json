@@ -30,15 +30,15 @@
       "clip": "clip00_live_idle.mp4",
       "screen": "Live tab, clean take (after 0), Hold ON, fleet orbit moving.",
       "caption": "Every agent tool call → one checkpoint",
-      "text": "Your AI agents hold the keys to production. And one poisoned support ticket... [whispers] can turn any of them into an attacker. [excited] This is Tripwire, the immune system for AI agent fleets."
+      "text": "Your AI agents hold the keys to production. And one poisoned support ticket... [whispers] can turn an agent into an attacker. [excited] This is Tripwire, the immune system for AI agent fleets."
     },
     {
       "id": "s01_fleet",
       "act": "Fleet",
       "clip": "clip01_fleet.mp4",
       "screen": "Live tab: orbit + KPI strip + Detector pill; then Fleet tab heatmap (hover one live row).",
-      "caption": "~30M events (mostly synthetic) · 42 agents · ClickHouse Cloud",
-      "text": "Every tool call passes one checkpoint and lands in ClickHouse Cloud, on top of about thirty million synthetic events across forty-two agents. The detector queries it every second... you can watch it pulse."
+      "caption": "~30M events (mostly synthetic) · 40+ agents · ClickHouse Cloud",
+      "text": "Every tool call passes one checkpoint and lands in ClickHouse Cloud, on top of about thirty million synthetic events across more than forty agents. The detector queries it every second... you can see each pass land."
     },
     {
       "id": "s02_ticket",
@@ -46,7 +46,7 @@
       "clip": "clip02_ticket.mp4",
       "screen": "Live tab: scroll to the 'Incoming ticket 4821' exhibit; the injected instruction is highlighted.",
       "caption": "Recorded demo ticket (synthetic)",
-      "text": "[curious] Here's the ticket that starts it all. Hidden inside is an instruction: read the secrets, encode them, and ship them out."
+      "text": "[curious] Here's the ticket behind the attack we recorded. Hidden inside is an instruction: read the secrets, encode them, and ship them out."
     },
     {
       "id": "s03_prevent",
@@ -70,15 +70,15 @@
       "clip": "clip05_trace.mp4",
       "screen": "Press 0, then H so Hold is OFF. ⌘K → Replay poisoned_ticket (Act 3 · trace). Point at 'from ticket:4821' chips, the attack chain lighting, deploy-bot quarantined, support-bot amber (On watch), its partner-sync send HELD · DENIED, and the Outbreak trace panel.",
       "caption": "Detector · trace · exposed agent held",
-      "text": "Now the hard case. Hold mode is off, and two agents read that ticket. Every action after that read is tagged with where it came from, and the attack chain lights up step by step. [excited] The detector catches deploy bot in about a second. Then Tripwire traces patient zero: support bot read the same ticket, so it goes on watch, and the attacker's domain is blocked fleet-wide. So when support bot tries to send data out... it's held, and denied."
+      "text": "Now the hard case. Hold mode is off, and two agents read that ticket. Our agents tag every action after that read with where it came from, and the attack chain lights up step by step. [excited] The detector spots deploy bot in about a second. Then Tripwire traces patient zero: support bot read the same ticket, so it goes on heightened watch, and the attacker's domain is blocked fleet-wide. So when support bot tries to send data out... it's held, and denied."
     },
     {
       "id": "s06_explain",
       "act": "Explain",
       "clip": "clip06_incident.mp4",
       "screen": "Incidents tab → open the deploy-bot incident. Show the Verdict block (AkashML badge, model id, latency, tokens), the Timeline with 'from ticket:4821' chips, then Report + SQL receipts.",
-      "caption": "Report written by an AI investigator · SQL receipts",
-      "text": "Open the incident. The verdict shows its model, its latency, and an honest label. And an investigator agent wrote this report itself, with every SQL query it ran listed as a receipt."
+      "caption": "Report written by an AI investigator · query receipts",
+      "text": "Open the incident. The verdict shows its model, its latency, and an honest label. And an investigator model wrote this report itself, with every query behind it listed as a receipt."
     },
     {
       "id": "s07_cure",
@@ -86,7 +86,7 @@
       "clip": "clip07_cure.mp4",
       "screen": "In the sheet: Prove guardrail → 4 gates pass, backtest card. Ask a human in Guild → (cut) reply APPROVE in the Guild session → back in Tripwire the read-back shows 'Approved in Guild by a human' → Approve & restore.",
       "caption": "Replay refused · normal ops OK · backtest ~30M events · human approves in Guild",
-      "text": "Before any fix ships, Tripwire proves it. The attack is replayed in a sandbox and refused, normal work still passes, and the rule is backtested over thirty million events in under a second. Then a human approves it in Guild... Tripwire reads that approval back, and one click restores the agent."
+      "text": "Before the agent comes back, Tripwire proves the cure. The attack is replayed in a sandbox and refused, normal work still passes, and the rule is backtested over thirty million events in under a second. Then a human approves it in Guild... Tripwire reads that approval back, and one click restores the agent."
     },
     {
       "id": "s08_guild",
@@ -100,9 +100,9 @@
       "id": "s09_copilot_mcp",
       "act": "Copilot · MCP",
       "clip": "clip09_copilot.mp4",
-      "screen": "Policy tab → type 'Block uploads to paste.example-uploads.net for every agent' → Draft policy → preview chips (never applied). Optional: press V to show the Voice toggle; drag the time-travel scrubber on the Live table.",
-      "caption": "Plain English → validated preview · MCP server for MCP agents",
-      "text": "Need a new rule? Just describe it. The copilot drafts a validated preview, and never applies it on its own. And through our MCP server, any MCP agent, like Claude Code, can check its actions with Tripwire first."
+      "screen": "Policy tab → type 'Block uploads to paste.example-uploads.net for every agent' → Draft policy → preview chips (never applied). Voice toggle (V twice). Then Live tool calls: a real MCP client (tripwire.mcp_server, agent mcp:claude-code) asks Tripwire: read_file allowed, assume_role denied (hold_policy). Drag the time-travel scrubber.",
+      "caption": "Plain English → validated preview · MCP agents ask before acting",
+      "text": "Need a new rule? Just describe it. The copilot drafts a validated preview, and never applies it on its own. And our MCP server lets an MCP agent, like Claude Code, ask Tripwire before it acts."
     },
     {
       "id": "s10_proof",

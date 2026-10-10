@@ -6,7 +6,7 @@ AI agents now hold production keys: they read config, run commands and call exte
 
 | | |
 |---|---|
-| **Demo video** (2:46, narrated) | VIDEO_LINK |
+| **Demo video** (2:49, narrated) | VIDEO_LINK |
 | **Live console** (view-only, while the demo laptop is up on Oct 9) | https://prevent-chairs-ranging-assume.trycloudflare.com |
 | **Repo** | https://github.com/bhargavchintam/tripwire |
 | **Demo run sheet** | [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md): every line, every click, with its timing |
