@@ -26,6 +26,7 @@ npx --yes "hyperframes@$HF_VERSION" render \
   --video-frame-format png \
   ${HF_EXTRA_ARGS:-}   # e.g. HF_EXTRA_ARGS="--workers 2 --browser-timeout 180" on a busy machine
 
+python3 "$DEMO/loudnorm.py" "$OUT_MP4"   # -16 LUFS for web playback (video stream copied)
 DUR="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_MP4")"
 ffprobe -v error -show_entries stream=codec_type,codec_name,width,height -of compact=p=0 "$OUT_MP4"
 echo "duration: ${DUR} s  ($OUT_MP4)"

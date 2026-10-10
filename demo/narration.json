@@ -101,7 +101,7 @@
       "id": "s09_copilot_mcp",
       "act": "Copilot · MCP",
       "clip": "clip09_copilot.mp4",
-      "screen": "Policy tab → type 'Block uploads to paste.example-uploads.net for every agent' → Draft policy → preview chips (never applied). Voice toggle (V twice). Then Live tool calls: a real MCP client (tripwire.mcp_server, agent mcp:claude-code) asks Tripwire: read_file allowed, assume_role denied (hold_policy). Drag the time-travel scrubber.",
+      "screen": "Policy tab → type 'Block uploads to paste.example-uploads.net for every agent' → Draft policy → preview diff (never applied). Scroll to the header and press V twice (voice announcer on/off). Then Live tool calls: an MCP client on tripwire.mcp_server (agent mcp:claude-code) asks Tripwire: read_file allowed, assume_role denied (hold_policy).",
       "caption": "Plain English → validated preview · MCP agents ask before acting",
       "text": "Need a new rule? Just describe it. The copilot drafts a validated preview, and never applies it on its own. And our MCP server lets an MCP agent, like Claude Code, ask Tripwire before it acts."
     },
@@ -118,7 +118,7 @@
       "id": "s11_close",
       "act": "Tripwire",
       "clip": "clip11_close.mp4",
-      "screen": "Sponsors tab (Semgrep card visible), then end card.",
+      "screen": "Sponsors tab: the Semgrep card (0 open true positives, #1 LLM01 fixed). Then Live: drag the time-travel scrubber back through the session's real tool calls; end card.",
       "caption": "github.com/bhargavchintam/tripwire",
       "text": "Semgrep scanned our own AI written code and found a real prompt injection flaw. We fixed it. [excited] Tripwire: prevent, trip, trace, and cure, with proof."
     }

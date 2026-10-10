@@ -448,9 +448,11 @@ await segment("s09_copilot_mcp", async (rec) => {
   if (now() - t0 > 1.6) rec.cuts.push([t0 + 0.8, now() - 0.3]);
   await center(page.getByLabel("Changes in the preview")); // "...and never applies it on its own."
   await park();
-  await at(5.4);
-  await key("v"); // the spoken-alerts toggle (optional feature) on ...
-  await at(6.2);
+  await at(5.0); // the spoken-alerts toggle (optional feature): bring the header pill into view first
+  await scrollTop();
+  await glide(page.getByLabel("Voice announcer"));
+  await key("v"); // ... on ...
+  await at(6.3);
   await key("v"); // ... and off again
   await at(6.8); // "And our MCP server lets an MCP agent, like Claude Code,"
   await tab("Live");
