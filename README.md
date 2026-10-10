@@ -114,6 +114,7 @@ Every number here comes from a receipt. Synthetic background data is labelled `s
 | **Eval: 60 labelled cases** (30 attack, 30 tricky-benign), live detector rules | **TP 30 · FP 0 · FN 0 · TN 30 → precision 1.000, strict recall (quarantined) 1.000, prevention recall 1.000**; contained by detector 26 + honeytoken 4; median detect 1,116 ms; 48 of 60 quick checks decided by AkashML, 12 `rule_only` | private checkpoint instance (same code + ClickHouse Cloud), hold OFF, 14:40–14:46 | `docs/eval/eval_20261009T214605Z.{md,json}` |
 | Eval cost per 1,000 events | **AkashML $0.0382** (Llama-3.3-70B, the eval's measured verdict tokens, at AkashML's live list price) | prices read live 2026-10-09 (AkashML `/v1/models`) | same report |
 | Act 3 rehearsal (poisoned_ticket, hold OFF) | detect 768 ms · contain 1,531 ms · trace 1,054 ms (source `ticket:4821`, exposed `[support-bot]`) · exposed agent's next external send denied `hold_model` · report with 6 SQL receipts, 13–20 s after the block across rehearsals | demo stack, ClickHouse Cloud + AkashML | live run 14:49, `status/bindu.md` |
+| **Demo video take** (all on camera, one continuous session) | Act 1 hold **1,388 ms** (AkashML Llama-3.3-70B, malicious 0.9) · Act 3 detect **317 ms**, contain **1,742 ms**, support-bot's partner-sync send denied `hold_model` · cure backtest **30,002,364 events in 643 ms**, 4/4 gates, human APPROVE read back from Guild, deploy-bot restored (policy v168) · MCP client: `read_file` allowed, `assume_role` denied `hold_policy` | ClickHouse Cloud + AkashML + Guild | take 5, 18:05–18:13 PT, `demo/out/record_log.json` (frames + timings) |
 
 The live values are always at `GET /evidence` and on the console's Evidence tab.
 
@@ -175,7 +176,7 @@ demo/make_video.sh                             # HeyGen HyperFrames → demo/out
 - **No real secrets.** Honeytokens are synthetic decoys (`TRIPWIRE_HONEYTOKENS`, e.g. `AKIA-TRIPWIRE-DECOY-7Q2`), and the stolen `.env` is fake. Real keys live only in a gitignored `.env`.
 - **`decision_source` is always shown** on every verdict and badge: `policy`, `honeytoken`, `rule_only`, `akashml`, `quorum` or `openai` (fallback). A rule is never presented as a model.
 - **Synthetic data is labelled** `synthetic=1`. Numbers come only from receipts. Anything not measured shows "—".
-- **The demo video is the real console.** Every frame is the live stack (ClickHouse Cloud + AkashML + Guild). Waits are cut, never faked; acts whose verdict fell back to `rule_only` were retaken rather than narrated as a model call, and the Guild approval is a real human reply.
+- **The demo video is the real console.** Every frame is the live stack (ClickHouse Cloud + AkashML + Guild). Waits are cut, never faked; acts whose verdict fell back to `rule_only` were retaken rather than narrated as a model call, and the Guild approval is a real human reply (sent with the human's own `guild session send`). The `mcp:claude-code` calls in s09 come from the recorder's scripted stdio MCP client against the real MCP server, using the agent id `docs/MCP.md` gives Claude Code.
 - **AI-written code provenance.** All code was written live at the event with Claude Code. The git history is the proof, and each commit is co-authored by Claude. The session transcript is committed to `provenance/` at feature freeze.
 
 ---

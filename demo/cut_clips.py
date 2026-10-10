@@ -62,6 +62,7 @@ def main() -> None:
     plan = json.loads((ROOT / "demo" / "narration.json").read_text())
     gap = float(plan["gap_s"])
     clip_of = {s["id"]: s["clip"] for s in plan["segments"]}
+    plan_seg = {s["id"]: s for s in plan["segments"]}
     last_id = plan["segments"][-1]["id"]
     frames = log["frames"]
     if not frames:
@@ -74,7 +75,8 @@ def main() -> None:
         if not take:
             sys.exit(f"{sid}: no accepted take in the log")
         target = seg["duration"] + gap + (END_CARD_S if sid == last_id else 0.0)
-        items = frame_list(frames, keep_ranges(take["start"], take["end"], take["cuts"]))
+        skip = float(plan_seg[sid].get("clip_skip_s", 0) or 0)  # trim a glitch at the head (narration.json)
+        items = frame_list(frames, keep_ranges(take["start"] + skip, take["end"], take["cuts"]))
         have = sum(d for _, d in items)
         lst = OUT / f"concat_{sid}.txt"
         lines = ["ffconcat version 1.0"]

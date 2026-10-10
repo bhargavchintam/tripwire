@@ -23,7 +23,8 @@ npx --yes "hyperframes@$HF_VERSION" render \
   --output ../out/tripwire-demo.mp4 \
   --fps 30 \
   --quality high \
-  --video-frame-format png
+  --video-frame-format png \
+  ${HF_EXTRA_ARGS:-}   # e.g. HF_EXTRA_ARGS="--workers 2 --browser-timeout 180" on a busy machine
 
 DUR="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_MP4")"
 ffprobe -v error -show_entries stream=codec_type,codec_name,width,height -of compact=p=0 "$OUT_MP4"

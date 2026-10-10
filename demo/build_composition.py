@@ -257,7 +257,9 @@ def build(segs: list[dict], total_narr: float, estimated: bool, test: bool, shot
         sid = re.sub(r"[^a-zA-Z0-9_-]", "_", s["id"])
         start, dur = float(s["start"]), float(s["duration"])
         # Visual covers the gap up to the next segment (no blank frames between clips).
-        vis_end = float(segs[i + 1]["start"]) if i + 1 < len(segs) else total_narr
+        # The last clip keeps playing under the end card (no blank frames while the card fades in).
+        last = i + 1 >= len(segs)
+        vis_end = total_narr + END_CARD_S if last else float(segs[i + 1]["start"])
         vis_dur = round(max(dur, vis_end - start), 3)
         clip = s.get("clip") or f"{sid}.mp4"
         clip_path = VIDEO / "clips" / clip
@@ -309,13 +311,17 @@ def build(segs: list[dict], total_narr: float, estimated: bool, test: bool, shot
 
         # track 2: act chip + caption (after the title card on the first segment)
         ov_start = max(start, TITLE_S if i == 0 else start)
-        ov_end = vis_end
+        ov_end = total_narr if last else vis_end
         ov_dur = round(ov_end - ov_start, 3)
+        # optional per-segment caption min width (narration.json "caption_min_width"): a wider box can
+        # cover on-screen text that would otherwise read as part of the caption
+        cmw = s.get("caption_min_width")
+        cap_style = f' style="min-width:{int(cmw)}px"' if cmw else ""
         if ov_dur > 0.8:
             track2.append(
                 f'      <div id="o-{sid}" class="clip ov" data-start="{f3(ov_start)}" data-duration="{f3(ov_dur)}" data-track-index="2">\n'
                 f'        <div class="chip" id="c-{sid}"><span class="dot"></span>{esc(s.get("act", ""))}</div>\n'
-                f'        <div class="cap-wrap" id="l-{sid}"><div class="cap"><span class="bar"></span><span class="txt">{esc(s.get("caption", ""))}</span></div></div>\n'
+                f'        <div class="cap-wrap" id="l-{sid}"><div class="cap"{cap_style}><span class="bar"></span><span class="txt">{esc(s.get("caption", ""))}</span></div></div>\n'
                 f"      </div>"
             )
             out_at = round(ov_end - 0.35, 3)
