@@ -14,20 +14,23 @@ import { TaintChip, taintOf } from "./incidents/Timeline";
 
 const COLS = "grid grid-cols-[104px_148px_112px_minmax(0,1fr)_136px_108px] items-center gap-3";
 const ROW_H = 40;
+/** Rows kept in presenter mode (P): enough for the Act 3 chain and its "from ticket:4821" chips. */
+const SLIM_ROWS = 6;
 
 /**
  * Virtualized live event table: last 200 tool events of live agents (newest first), filterable by agent.
  * D9 time travel: a scrubber over these same real events; while scrubbed the table shows only rows at or
  * before T plus each agent's state at T (client-side tallies). Live resumes the stream view.
+ * `slim` (presenter mode): the newest SLIM_ROWS rows only, always live, no filter chips or scrubber.
  */
-export function EventTable() {
+export function EventTable({ slim = false }: { slim?: boolean } = {}) {
   const { state } = useTripwire();
   const all = state.events;
   const [agent, setAgent] = useState<string | null>(null);
   const [at, setAt] = useState<number | null>(null); // null = live
   const times = useMemo(() => eventTimes(all), [all]);
   // A reset/snapshot that empties the table (or leaves < 2 events) returns to live.
-  const t = times.length < 2 ? null : at;
+  const t = slim || times.length < 2 ? null : at;
   const scoped = useMemo(() => eventsUpTo(all, t), [all, t]);
 
   // Per-agent counts of the rows on screen (display only: a filter, never a metric).
@@ -36,8 +39,11 @@ export function EventTable() {
     for (const e of scoped) m.set(e.agent_id, (m.get(e.agent_id) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   }, [scoped]);
-  const active = agent && agents.some(([a]) => a === agent) ? agent : null;
-  const rows = useMemo(() => (active ? scoped.filter((e) => e.agent_id === active) : scoped), [scoped, active]);
+  const active = !slim && agent && agents.some(([a]) => a === agent) ? agent : null;
+  const rows = useMemo(() => {
+    const r = active ? scoped.filter((e) => e.agent_id === active) : scoped;
+    return slim ? r.slice(0, SLIM_ROWS) : r;
+  }, [scoped, active, slim]);
   const atT = useMemo(
     () => (t === null ? [] : agentStateAt(scoped).filter((a) => !active || a.agent_id === active)),
     [scoped, t, active],
@@ -74,19 +80,19 @@ export function EventTable() {
           <Radio /> Stream · tool_event
         </>
       }
-      title="Live tool calls"
+      title={slim ? "Latest tool calls" : "Live tool calls"}
       actions={
         <span className="flex flex-wrap items-center justify-end gap-2">
           {t !== null && <TimeTravelChip t={t} />}
           <span className="font-mono text-[12px] text-dim">
-            {rows.length} shown{active || t !== null ? ` of ${all.length}` : ""} · live agents only
+            {rows.length} shown{active || t !== null || slim ? ` of ${all.length}` : ""} · live agents only
           </span>
         </span>
       }
       bodyClassName="flex min-h-0 flex-col gap-3 pt-1"
     >
       {/* agent filter chips */}
-      {agents.length > 0 && (
+      {!slim && agents.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by agent">
           <ListFilter className="mr-0.5 size-4 text-dim" strokeWidth={1.75} aria-hidden />
           <button
@@ -122,7 +128,7 @@ export function EventTable() {
         </div>
       )}
 
-      <TimeScrubber times={times} t={t} onChange={setAt} />
+      {!slim && <TimeScrubber times={times} t={t} onChange={setAt} />}
       {t !== null && <AgentStateAtT agents={atT} t={t} />}
 
       <div className="overflow-x-auto rounded-xl border border-line">
@@ -135,7 +141,7 @@ export function EventTable() {
             <span>Result</span>
             <span>Reason</span>
           </div>
-          <div ref={parentRef} className="h-[400px] overflow-y-auto">
+          <div ref={parentRef} className={cn(slim ? "h-[240px]" : "h-[400px]", "overflow-y-auto")}>
             {loading ? (
               <div role="status" aria-label="Loading events" className="flex flex-col">
                 {Array.from({ length: 8 }, (_, i) => (

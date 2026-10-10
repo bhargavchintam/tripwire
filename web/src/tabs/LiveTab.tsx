@@ -162,7 +162,10 @@ export function LiveTab({
       {/* Presenter mode keeps the outbreak flow only once there is one (demo act 3). */}
       <OutbreakPanel hideWhenEmpty={presenter} />
 
-      {!presenter && (
+      {/* Presenter mode keeps a slim live list (newest rows, taint chips) because Act 3 narrates it. */}
+      {presenter ? (
+        <EventTable slim />
+      ) : (
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-12 min-w-0 xl:col-span-8">
             <EventTable />
