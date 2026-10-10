@@ -3,6 +3,7 @@
     ELEVENLABS_API_KEY=... uv run python demo/tts.py            # all segments
     uv run python demo/tts.py --only s05_trace                  # regenerate one segment
     uv run python demo/tts.py --dry-run                         # print the plan, call nothing
+    uv run python demo/tts.py --from-files                      # audio already in demo/out/audio (ElevenLabs MCP)
 
 Reads demo/narration.json; writes demo/out/audio/<segment>.mp3, demo/out/timeline.json and
 demo/out/narration.mp3 (all segments joined with the configured gap). The key is read from the
@@ -90,6 +91,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="regenerate just this segment id")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--from-files", action="store_true",
+                    help="skip the API: build the timeline + narration track from demo/out/audio/*.mp3 "
+                         "(e.g. generated with the ElevenLabs MCP)")
     args = ap.parse_args()
 
     plan = json.loads((DEMO / "narration.json").read_text())
@@ -103,11 +107,12 @@ def main() -> None:
         if not shutil.which(tool):
             sys.exit(f"{tool} not found (brew install ffmpeg)")
 
-    key = api_key()
-    voice_id, voice_name = resolve_voice(key, cfg)
     (OUT / "audio").mkdir(parents=True, exist_ok=True)
-    model = cfg["model_id"]
-    for s in segs:
+    model, voice_name = cfg["model_id"], cfg["voice_name"]
+    if not args.from_files:
+        key = api_key()
+        voice_id, voice_name = (cfg["voice_id"], cfg["voice_name"]) if cfg.get("voice_id") else resolve_voice(key, cfg)
+    for s in [] if args.from_files else segs:
         if args.only and s["id"] != args.only:
             continue
         try:

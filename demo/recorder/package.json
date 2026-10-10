@@ -1,0 +1,7 @@
+{
+  "name": "tripwire-demo-recorder",
+  "private": true,
+  "type": "module",
+  "description": "Drives the live Tripwire console through the demo run sheet and records it (Playwright).",
+  "dependencies": { "playwright": "1.63.0" }
+}

@@ -405,6 +405,7 @@ export function useTripwireStream() {
   useEffect(() => {
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let down: ReturnType<typeof setTimeout> | undefined;
     let backoff = 1000;
     let disposed = false;
 
@@ -443,10 +444,14 @@ export function useTripwireStream() {
       es = new EventSource("/stream");
       es.onopen = () => {
         backoff = 1000;
+        if (down) clearTimeout(down);
         dispatch({ kind: "connection", value: "live" });
       };
       es.onerror = () => {
-        dispatch({ kind: "connection", value: "reconnecting" });
+        // Only show "reconnecting" if the stream stays down: the public view (tripwire/public_view.py)
+        // ends each response after one snapshot and the browser reconnects within ~2 s.
+        if (down) clearTimeout(down);
+        down = setTimeout(() => dispatch({ kind: "connection", value: "reconnecting" }), 4000);
         // Native EventSource retries by itself unless the response was fatal (CLOSED).
         if (es && es.readyState === EventSource.CLOSED) {
           es.close();
@@ -462,6 +467,7 @@ export function useTripwireStream() {
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      if (down) clearTimeout(down);
       es?.close();
     };
   }, [qc]);

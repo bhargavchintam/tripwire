@@ -1,0 +1,13 @@
+{
+  "name": "tripwire-demo-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.8.143 preview",
+    "check": "npx --yes hyperframes@0.8.143 check",
+    "lint": "npx --yes hyperframes@0.8.143 lint",
+    "render": "npx --yes hyperframes@0.8.143 render --output ../out/tripwire-demo.mp4 --fps 30 --quality high --video-frame-format png"
+  },
+  "hyperframesVersion": "0.8.143",
+  "gsapVersion": "3.14.2 (vendored at assets/vendor/gsap.min.js; no CDN)"
+}

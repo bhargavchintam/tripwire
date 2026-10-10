@@ -1,0 +1,9 @@
+# large/generated media: recordings, copied narration, HyperFrames working dirs
+clips/*
+!clips/.gitkeep
+audio/*
+!audio/.gitkeep
+renders/
+snapshots/
+.hyperframes/
+assets/placeholders/
