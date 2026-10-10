@@ -23,8 +23,8 @@ Who runs each step:
 ## What we're building (fastest path the docs support)
 
 ```
-Guild Native agent "tripwire-release-bot"            (PROMPT.md + guild.yaml: no code, no build, no container)
-  │ tool: tripwire_call_tool                          (custom integration bindubhargavareddy~tripwire, op call_tool)
+Guild Native agent "tripwire-deploy-bot"             (PROMPT.md + guild.yaml: no code, no build, no container)
+  │ tool: tripwire_tool                               (custom integration bindubhargavareddy~tripwire2, op tool)
   ▼
 Guild integration proxy  ── injects header  X-Tripwire-Token: <proxy token>   (agent never sees it)
   ▼
