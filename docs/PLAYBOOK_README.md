@@ -8,18 +8,18 @@
 
 1. Open a Claude Code session **in this folder** (or the repo once it exists). `CLAUDE.md` loads automatically.
 2. Claude asks: **"Are you Bindu or Sripadha?"** Answer it.
-3. Claude reads `00_MASTER_PLAN.md` (shared rules) and your track file, then tells you which checkpoint is current and your open tasks.
+3. Claude reads `docs/hackathon/00_MASTER_PLAN.md` (shared rules) and your track file, then tells you which checkpoint is current and your open tasks.
 
 ## The files
 
 | File | What it's for | Who edits |
 |---|---|---|
 | `CLAUDE.md` | Auto-loaded router + guardrails; asks who you are | nobody (reference) |
-| `00_MASTER_PLAN.md` | **Source of truth:** product, architecture, the frozen contract, git rules, checkpoints, demo | Bindu (frozen after 9:45) |
-| `BINDU_platform_and_experience.md` | Bindu's track: checkpoint, ClickHouse, React UI | Bindu |
-| `SRIPADHA_agents_and_intelligence.md` | Sripadha's track: agents, detection, AI/models, sponsors | Sripadha |
-| `status/bindu.md` | Bindu's progress log (Sripadha reads it) | Bindu only |
-| `status/sripadha.md` | Sripadha's progress log (Bindu reads it) | Sripadha only |
+| `docs/hackathon/00_MASTER_PLAN.md` | **Source of truth:** product, architecture, the frozen contract, git rules, checkpoints, demo | Bindu (frozen after 9:45) |
+| `docs/hackathon/BINDU_platform_and_experience.md` | Bindu's track: checkpoint, ClickHouse, React UI | Bindu |
+| `docs/hackathon/SRIPADHA_agents_and_intelligence.md` | Sripadha's track: agents, detection, AI/models, sponsors | Sripadha |
+| `docs/hackathon/status/bindu.md` | Bindu's progress log (Sripadha reads it) | Bindu only |
+| `docs/hackathon/status/sripadha.md` | Sripadha's progress log (Bindu reads it) | Sripadha only |
 
 ## The three rules that keep merges clean
 
@@ -29,7 +29,7 @@
 
 ## Change Request format (when you must touch a frozen file or a seam)
 
-Put this in your own `status/<name>.md` and say it out loud to the other person:
+Put this in your own `docs/hackathon/status/<name>.md` and say it out loud to the other person:
 
 ```
 CONTRACT CHANGE REQUEST · HH:MM
