@@ -15,6 +15,10 @@ jobs:
     name: unit + integration tests (offline)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Typer forces coloured --help output when GITHUB_ACTIONS is set. That breaks the plain-text
+      # flag check in tests/unit/test_detector_loop.py, so keep the output plain, as on a laptop.
+      _TYPER_FORCE_DISABLE_TERMINAL: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
