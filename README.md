@@ -2,12 +2,17 @@
 
 AI agents now hold production keys: they read config, run commands and call external APIs, and a single poisoned ticket can turn one into an attacker. Logs and dashboards only show this after the secret is gone. Tripwire sits in front of every tool call. It **holds and denies a risky action before it runs**, **trips on decoy secrets**, **traces the poisoned input across the fleet**, and **cures the fleet** with a guardrail that is proven by replay and a backtest over the full fleet history in ClickHouse before a human approves it.
 
+<p align="center">
+  <img src="docs/img/tripwire-demo.gif" alt="Tripwire demo: every agent tool call goes through one checkpoint; a risky send is held and denied before it runs; the detector traces the poisoned ticket and holds the exposed agent; an AI investigator writes the incident report; a human approves the proven cure in Guild" width="900">
+  <br><sub>24-second cut of the narrated demo video below</sub>
+</p>
+
 > Built live at the Cyberdefense Hackathon (#SFTechWeek, AWS Builder Loft SF, Oct 9 2026) by **Bindu** and **Sripadha** using Claude Code. Every feature below is **built** and shown working on the real console.
 
 | | |
 |---|---|
 | **Demo video** (2:49, narrated) | **[Watch on Google Drive](https://drive.google.com/file/d/18qIi00985h8teDnVUMiBtqvM2Go9EyNQ/view?usp=drive_link)** · mirror: [MP4 on the GitHub release](https://github.com/bhargavchintam/tripwire/releases/download/v1.0-submission/tripwire-demo.mp4) ([release page](https://github.com/bhargavchintam/tripwire/releases/tag/v1.0-submission)) |
-| **Live console** (view-only; a temporary Cloudflare quick tunnel, live only while the demo laptop runs) | https://starring-info-surrounding-drugs.trycloudflare.com |
+| **Live console** | Offline since the event: it ran on a temporary Cloudflare tunnel from the demo laptop. [Run it locally](#run-it) instead. |
 | **Repo** | https://github.com/bhargavchintam/tripwire |
 | **Demo run sheet** | [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md): every line, every click, with its timing |
 
