@@ -1,0 +1,27 @@
+name: ci
+
+# Offline test run: no ClickHouse, AkashML or Guild credentials are needed.
+# Tests that need ClickHouse skip themselves when it is not reachable on localhost:8123.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unit + integration tests (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install Python deps from uv.lock
+        run: uv sync --locked
+      - name: Run the tests (make test)
+        run: make test
